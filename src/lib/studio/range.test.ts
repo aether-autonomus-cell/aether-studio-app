@@ -17,8 +17,15 @@ test("start-end replaces the last number when {n} is absent", () => {
   ]);
 });
 
-test("a range over forty chapters is refused", () => {
-  assert.throws(() => expandChapterUrls("https://example.com/{n}", 1, 41), /40/);
+test("a range past the old forty-chapter wall is allowed", () => {
+  const urls = expandChapterUrls("https://example.com/{n}", 1, 41);
+  assert.equal(urls.length, 41);
+  assert.equal(urls[0], "https://example.com/1");
+  assert.equal(urls[40], "https://example.com/41");
+});
+
+test("an enormous range is still refused", () => {
+  assert.throws(() => expandChapterUrls("https://example.com/{n}", 1, 2001), /2000/);
 });
 
 test("long text is chunked without dropping the ending", () => {

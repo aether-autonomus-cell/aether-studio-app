@@ -1,0 +1,262 @@
+/** WTR-LAB serves chapter text from a JSON API, not the Cloudflare HTML shell. */
+
+const KEY_TEXT = "IJAFUUxjM25hyzL2AZrn0wl7cESED6Ru";
+
+export type WtrTarget = {
+  origin: string;
+  language: string;
+  rawId: string;
+  chapterNo: string;
+  referer: string;
+};
+
+function b64(value: string): Uint8Array<ArrayBuffer> {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function concatBytes(parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
+  const total = parts.reduce((sum, part) => sum + part.byteLength, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.byteLength;
+  }
+  return out;
+}
+
+/** Chapter bodies are `arr:` / `str:` plus AES-GCM (`iv : tag : ciphertext`, all base64). */
+export async function decryptWtrBody(encrypted: string): Promise<string> {
+  let payload = encrypted.trim();
+  let asArray = false;
+  if (payload.startsWith("arr:")) {
+    asArray = true;
+    payload = payload.slice(4);
+  } else if (payload.startsWith("str:")) {
+    payload = payload.slice(4);
+  } else {
+    throw new Error("Unknown chapter format.");
+  }
+  const parts = payload.split(":");
+  if (parts.length !== 3) throw new Error("Invalid chapter payload.");
+  const [ivPart, tagPart, dataPart] = parts;
+  const iv = b64(ivPart);
+  const tag = b64(tagPart);
+  const data = b64(dataPart);
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(KEY_TEXT), "AES-GCM", false, ["decrypt"]);
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, concatBytes([data, tag]));
+  const decoded = new TextDecoder().decode(plain);
+  if (!asArray) return decoded;
+  const parsed = JSON.parse(decoded) as unknown;
+  if (Array.isArray(parsed)) return parsed.filter((line) => typeof line === "string").join("\n\n");
+  return typeof parsed === "string" ? parsed : "";
+}
+
+export function parseWtrChapterUrl(raw: string): WtrTarget | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase().replace(/^www\./, "");
+  if (host !== "wtr-lab.com") return null;
+  const parts = url.pathname.split("/").filter(Boolean);
+  const chapter = [...parts].reverse().find((part) => /^chapter-\d+$/i.test(part));
+  if (!chapter) return null;
+  const chapterNo = chapter.replace(/^chapter-/i, "");
+  const novelAt = parts.findIndex((part) => part.toLowerCase() === "novel");
+  let language = "en";
+  let rawId = "";
+  if (novelAt >= 0 && /^\d+$/.test(parts[novelAt + 1] ?? "")) {
+    rawId = parts[novelAt + 1];
+    if (novelAt > 0 && /^[a-z]{2}$/i.test(parts[novelAt - 1])) language = parts[novelAt - 1].toLowerCase();
+  } else {
+    const serie = parts.find((part) => /^serie-\d+$/i.test(part));
+    if (!serie) return null;
+    rawId = serie.replace(/^serie-/i, "");
+    const serieAt = parts.indexOf(serie);
+    if (serieAt > 0 && /^[a-z]{2}$/i.test(parts[serieAt - 1])) language = parts[serieAt - 1].toLowerCase();
+  }
+  return { origin: url.origin, language, rawId, chapterNo, referer: url.toString() };
+}
+
+function browserHeaders(referer: string, json: boolean): Headers {
+  const headers = new Headers({
+    Accept: json ? "application/json, text/plain, */*" : "text/html,application/xhtml+xml",
+    "Accept-Language": "en-US,en;q=0.9",
+    "User-Agent":
+      "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+    Referer: referer,
+    Origin: new URL(referer).origin,
+  });
+  if (json) headers.set("Content-Type", "application/json");
+  return headers;
+}
+
+async function readJson(url: string, init: RequestInit): Promise<unknown | null> {
+  let res: Response;
+  try {
+    res = await fetch(url, { ...init, redirect: "follow", signal: AbortSignal.timeout(20000) });
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  try {
+    return (await res.json()) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function chapterMeta(
+  json: unknown,
+  chapterNo: string,
+): { id?: number; serie_id?: number; title?: string } | null {
+  const stack: unknown[] = [json];
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current || typeof current !== "object") continue;
+    if (Array.isArray(current)) {
+      for (const item of current) stack.push(item);
+      continue;
+    }
+    const row = current as Record<string, unknown>;
+    const order = row.order ?? row.chapter_no ?? row.chapterNo;
+    if (String(order ?? "") === chapterNo && (typeof row.id === "number" || typeof row.chapter_id === "number")) {
+      const id = typeof row.id === "number" ? row.id : (row.chapter_id as number);
+      const serie = typeof row.serie_id === "number" ? row.serie_id : undefined;
+      const title = typeof row.title === "string" ? row.title : typeof row.name === "string" ? row.name : undefined;
+      return { id, serie_id: serie, title };
+    }
+    for (const value of Object.values(row)) {
+      if (value && typeof value === "object") stack.push(value);
+    }
+  }
+  return null;
+}
+
+function contentUrlOf(json: unknown): string | null {
+  const stack: unknown[] = [json];
+  let depth = 0;
+  while (stack.length && depth < 400) {
+    depth += 1;
+    const current = stack.pop();
+    if (!current || typeof current !== "object") continue;
+    if (Array.isArray(current)) {
+      for (const item of current) stack.push(item);
+      continue;
+    }
+    const row = current as Record<string, unknown>;
+    if (typeof row.content_url === "string" && row.content_url) return row.content_url;
+    for (const value of Object.values(row)) {
+      if (value && typeof value === "object") stack.push(value);
+    }
+  }
+  return null;
+}
+
+async function stringsFromBody(body: unknown): Promise<string[]> {
+  if (Array.isArray(body)) return body.filter((line): line is string => typeof line === "string" && line.trim().length > 0);
+  if (typeof body !== "string") return [];
+  const trimmed = body.trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith("arr:") || trimmed.startsWith("str:")) {
+    try {
+      const decoded = await decryptWtrBody(trimmed);
+      return decoded
+        .split(/\n+/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+  if (trimmed.startsWith("<")) return [trimmed];
+  if (trimmed.length > 40) return [trimmed];
+  return [];
+}
+
+async function collectChapterText(json: unknown): Promise<{ title: string; lines: string[] }> {
+  let title = "";
+  const lines: string[] = [];
+  const stack: unknown[] = [json];
+  let depth = 0;
+  while (stack.length && depth < 800) {
+    depth += 1;
+    const current = stack.pop();
+    if (!current || typeof current !== "object") continue;
+    if (Array.isArray(current)) {
+      const asLines = await stringsFromBody(current);
+      if (asLines.length > 1 && asLines.join("").length > 80) lines.push(...asLines);
+      else for (const item of current) stack.push(item);
+      continue;
+    }
+    const row = current as Record<string, unknown>;
+    if (!title && typeof row.title === "string" && row.title.trim()) title = row.title.trim();
+    for (const key of ["body", "content", "text", "html", "paragraphs"]) {
+      if (!(key in row)) continue;
+      const pulled = await stringsFromBody(row[key]);
+      if (pulled.length) lines.push(...pulled);
+    }
+    for (const value of Object.values(row)) {
+      if (value && typeof value === "object") stack.push(value);
+    }
+  }
+  return { title, lines };
+}
+
+export async function fetchWtrChapter(target: WtrTarget): Promise<{ title: string; text: string } | null> {
+  const headers = browserHeaders(target.referer, true);
+  const list = await readJson(
+    `${target.origin}/api/chapters/${target.rawId}?start=${target.chapterNo}&end=${target.chapterNo}`,
+    { method: "GET", headers },
+  );
+  const meta = list ? chapterMeta(list, target.chapterNo) : null;
+  const payloads: Record<string, unknown>[] = [
+    {
+      translate: "web",
+      language: target.language,
+      raw_id: Number(target.rawId),
+      chapter_no: Number(target.chapterNo),
+      retry: false,
+      force_retry: false,
+    },
+  ];
+  if (meta?.id) {
+    payloads.unshift({
+      translate: "web",
+      language: target.language,
+      raw_id: meta.serie_id ?? Number(target.rawId),
+      chapter_no: Number(target.chapterNo),
+      chapter_id: meta.id,
+      retry: false,
+      force_retry: false,
+    });
+  }
+  for (const payload of payloads) {
+    let json = await readJson(`${target.origin}/api/reader/get`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+    if (!json || typeof json !== "object") continue;
+    const row = json as Record<string, unknown>;
+    if (row.success === false) continue;
+    const remote = contentUrlOf(json);
+    if (remote) {
+      const next = new URL(remote, target.origin);
+      const followed = await readJson(next.toString(), { method: "GET", headers });
+      if (followed) json = followed;
+    }
+    const collected = await collectChapterText(json);
+    const text = collected.lines.join("\n\n").trim();
+    if (text.length < 80) continue;
+    const title = (meta?.title || collected.title || `Chapter ${target.chapterNo}`).trim();
+    return { title, text };
+  }
+  return null;
+}

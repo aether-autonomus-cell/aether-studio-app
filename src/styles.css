@@ -72,6 +72,33 @@
   text-shadow: 0 2px 0 #14110f;
 }
 
+.field,
+.field:focus,
+.field:active {
+  color-scheme: light;
+  background-color: #f3eadb !important;
+  color: #14110f !important;
+  border: 1.5px solid #9e2616;
+  caret-color: #9e2616;
+  opacity: 1;
+  -webkit-text-fill-color: #14110f !important;
+  box-shadow: none;
+}
+
+.field::placeholder {
+  color: #7a6a5c !important;
+  -webkit-text-fill-color: #7a6a5c !important;
+  opacity: 1;
+}
+
+.field:-webkit-autofill,
+.field:-webkit-autofill:hover,
+.field:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px #f3eadb inset !important;
+  -webkit-text-fill-color: #14110f !important;
+  caret-color: #9e2616;
+}
+
 .grow-bar {
   transform-origin: left;
   animation: aether-grow 1.1s ease-in-out infinite;

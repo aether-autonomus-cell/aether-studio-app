@@ -20,7 +20,7 @@ Set these in **Vercel → Project → Settings → Environment Variables**. Use 
 
 | Name | Where | Required? | What it is |
 | --- | --- | --- | --- |
-| `GEMINI_API_KEY` | Server only. Vercel env, or the host's secret store. Never in the repo, never in the YouTube tab, never in `job.json`. | Only if Gemini should direct chapters and paint panels. | Key from [Google AI Studio](https://aistudio.google.com/apikey). Settings shows **configured** or **not configured**. Models are named in `src/lib/studio/config.ts`. |
+| `GEMINI_API_KEY` | Optional server fallback. Settings also accepts a key and stores it in this browser's `localStorage`. Never commit a key. | No. Direct, paint, and Gemini voice use the key from Settings first. | Key from [Google AI Studio](https://aistudio.google.com/apikey). |
 | `DATABASE_URL` | Server only, if you later add your own SQL migrations at `migrations/*.sql`. | No. | This studio does not store chapters in a database. `npm run build` skips migrate when this is unset. The auth SQL under `migrations/auth/` is not applied. |
 | Worker URL | Not an env var. Typed in **Settings** on the phone. | Only for Live worker mode. | Public `https://…` origin of your worker. Private hosts stay blocked. |
 | Worker token | Not an env var. Typed in **Settings**. Header `X-Aether-Token` only. | Only for Live worker mode. | Stays in `sessionStorage`. It is not written into `job.json` or this README. |

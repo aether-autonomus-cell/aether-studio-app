@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Clapperboard, Download, Factory, Mic, ScrollText, Settings, Sparkles, Youtube } from "lucide-react";
 import { InstallHint } from "@/components/studio/install-hint";
-import { directChapter, fetchSource, jobStatus, paintPanel, providerStatus, speakLine, submitJob, testWorker } from "@/lib/studio/api";
+import { directChapter, fetchSource, jobStatus, paintPanel, speakLine, submitJob, testWorker } from "@/lib/studio/api";
 import type { AiProvider } from "@/lib/studio/config";
-import { studioConfig } from "@/lib/studio/config";
-import { downloadBlob, pickMaleVoice, renderStripPng, speakOnDevice } from "@/lib/studio/export";
+import { chooseVoice, downloadBlob, loadVoices, primeSpeechUnlock, renderStripPng, speakOnDevice } from "@/lib/studio/export";
+import { sanitizeNovelText } from "@/lib/studio/extract";
 import type { JobSnapshot } from "@/lib/studio/jobs";
 import { FACTORY_CELL, SAMPLE, SAMPLE_TEXT, cutChapter, dialogueWithoutSpeaker, jobPacket, mergeCuts, projectFromChapters, youtubePrivacy, type Project, type Scene, type YoutubePrivacy } from "@/lib/studio/model";
 import { chunkChapterText, expandChapterUrls } from "@/lib/studio/range";
@@ -14,6 +14,18 @@ type WorkerMode = "live" | "packet";
 
 const STORAGE_KEY = "aether-studio-v1";
 const SESSION_KEY = "aether-worker-session";
+const GEMINI_KEY_STORAGE = "aether-gemini-key";
+const BENCH_KEY = "aether-bench-urls";
+
+function safeHttp(value: string): string | null {
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
 
 function sourceLabel(source: Project["source"]): string {
   if (source === "sample") return "Sample painted";
@@ -147,7 +159,9 @@ function YoutubePreview({
   }, [tagsKey, project.seo.tags]);
 
   function cardText(tags: string[]): string {
-    return `${project.seo.title}\n\n${project.seo.description}\n\n${tags.join(", ")}\n\nPrivacy: ${privacy}`;
+    const title = sanitizeNovelText(project.seo.title) || project.seo.title;
+    const description = sanitizeNovelText(project.seo.description) || project.seo.description;
+    return `${title}\n\n${description}\n\n${tags.join(", ")}\n\nPrivacy: ${privacy}`;
   }
 
   return (
@@ -184,7 +198,7 @@ function YoutubePreview({
               value={project.seo.title}
               maxLength={100}
               onChange={(event) => onChange({ title: event.target.value })}
-              className="mt-2 min-h-12 w-full rounded-xl bg-ink px-3 text-base text-paper outline-none"
+              className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none"
             />
           </label>
           <label className="block" htmlFor="yt-description">
@@ -197,7 +211,7 @@ function YoutubePreview({
               value={project.seo.description}
               maxLength={5000}
               onChange={(event) => onChange({ description: event.target.value })}
-              className="mt-2 min-h-32 w-full rounded-xl bg-ink px-3 py-3 text-base text-paper outline-none"
+              className="field mt-2 min-h-32 w-full rounded-xl px-3 py-3 text-base outline-none"
             />
           </label>
           <label className="block" htmlFor="yt-tags">
@@ -213,7 +227,7 @@ function YoutubePreview({
                 setTagDraft(tags.join(", "));
               }}
               placeholder="motion comic, manhua"
-              className="mt-2 min-h-12 w-full rounded-xl bg-ink px-3 text-base text-paper outline-none placeholder:text-muted"
+              className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted"
             />
             <span className="mt-2 block text-xs text-muted">Comma-separated. Fifteen tags at most. Not a sign-in.</span>
           </label>
@@ -253,11 +267,73 @@ function YoutubePreview({
   );
 }
 
+function BenchLinks({
+  colabUrl,
+  kaggleUrl,
+  onColab,
+  onKaggle,
+}: {
+  colabUrl: string;
+  kaggleUrl: string;
+  onColab: (value: string) => void;
+  onKaggle: (value: string) => void;
+}) {
+  const colab = safeHttp(colabUrl);
+  const kaggle = safeHttp(kaggleUrl);
+  return (
+    <div className="space-y-3 rounded-2xl bg-ink-2 p-4">
+      <h3 className="text-lg text-paper">Colab and Kaggle</h3>
+      <p className="text-xs text-muted">Saved on this phone. Switch notebooks without retyping. The job packet is still what you upload.</p>
+      <label className="block" htmlFor="colab-url">
+        <span className="text-sm font-medium text-paper">Colab URL</span>
+        <input
+          id="colab-url"
+          value={colabUrl}
+          onChange={(event) => onColab(event.target.value)}
+          placeholder="https://colab.research.google.com/drive/…"
+          inputMode="url"
+          autoComplete="off"
+          className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted"
+        />
+      </label>
+      <a
+        href={colab ?? undefined}
+        target="_blank"
+        rel="noreferrer"
+        aria-disabled={!colab}
+        className={`flex min-h-11 items-center justify-center rounded-xl bg-panel text-sm font-semibold text-paper ${colab ? "" : "pointer-events-none opacity-50"}`}
+      >
+        Open Colab
+      </a>
+      <label className="block" htmlFor="kaggle-url">
+        <span className="text-sm font-medium text-paper">Kaggle URL</span>
+        <input
+          id="kaggle-url"
+          value={kaggleUrl}
+          onChange={(event) => onKaggle(event.target.value)}
+          placeholder="https://www.kaggle.com/code/…"
+          inputMode="url"
+          autoComplete="off"
+          className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted"
+        />
+      </label>
+      <a
+        href={kaggle ?? undefined}
+        target="_blank"
+        rel="noreferrer"
+        aria-disabled={!kaggle}
+        className={`flex min-h-11 items-center justify-center rounded-xl bg-panel text-sm font-semibold text-paper ${kaggle ? "" : "pointer-events-none opacity-50"}`}
+      >
+        Open Kaggle
+      </a>
+    </div>
+  );
+}
+
 export function StudioApp() {
   const [tab, setTab] = useState<Tab>("strip");
   const [project, setProject] = useState<Project>(SAMPLE);
   const [draft, setDraft] = useState(SAMPLE_TEXT);
-  const [rights, setRights] = useState(false);
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -270,12 +346,11 @@ export function StudioApp() {
   const [workerUrl, setWorkerUrl] = useState("");
   const [workerToken, setWorkerToken] = useState("");
   const [aiProvider, setAiProvider] = useState<AiProvider>("gemini");
-  const [aiStatus, setAiStatus] = useState<{
-    geminiConfigured: boolean;
-    geminiModel: string;
-    geminiImageModel: string;
-    xaiEnabled: boolean;
-  } | null>(null);
+  const [geminiKey, setGeminiKey] = useState("");
+  const [revealKey, setRevealKey] = useState(false);
+  const [colabUrl, setColabUrl] = useState("");
+  const [kaggleUrl, setKaggleUrl] = useState("");
+  const [keysReady, setKeysReady] = useState(false);
   const [sessionReady, setSessionReady] = useState(false);
   const [rangeStart, setRangeStart] = useState("");
   const [rangeEnd, setRangeEnd] = useState("");
@@ -346,26 +421,32 @@ export function StudioApp() {
   }, [sessionReady, workerMode, workerUrl, workerToken, aiProvider, job]);
 
   useEffect(() => {
-    providerStatus({ data: {} })
-      .then(setAiStatus)
-      .catch(() =>
-        setAiStatus({
-          geminiConfigured: false,
-          geminiModel: studioConfig.geminiModel,
-          geminiImageModel: studioConfig.geminiImageModel,
-          xaiEnabled: false,
-        }),
-      );
+    try {
+      setGeminiKey(localStorage.getItem(GEMINI_KEY_STORAGE) ?? "");
+      const bench = localStorage.getItem(BENCH_KEY);
+      if (bench) {
+        const parsed = JSON.parse(bench) as { colab?: unknown; kaggle?: unknown };
+        if (typeof parsed.colab === "string") setColabUrl(parsed.colab);
+        if (typeof parsed.kaggle === "string") setKaggleUrl(parsed.kaggle);
+      }
+    } catch {
+      /* private mode — the fields still work until refresh */
+    } finally {
+      setKeysReady(true);
+    }
   }, []);
 
-  const ownWork = rights || draft.trim() === SAMPLE_TEXT.trim();
-
-  function requireRights(): boolean {
-    if (ownWork) return true;
-    setError("Confirm this chapter is yours to adapt. Paywalled pages are not bypassed.");
-    setTab("story");
-    return false;
-  }
+  useEffect(() => {
+    if (!keysReady) return;
+    try {
+      const key = geminiKey.trim();
+      if (key) localStorage.setItem(GEMINI_KEY_STORAGE, key);
+      else localStorage.removeItem(GEMINI_KEY_STORAGE);
+      localStorage.setItem(BENCH_KEY, JSON.stringify({ colab: colabUrl.trim(), kaggle: kaggleUrl.trim() }));
+    } catch {
+      /* private mode */
+    }
+  }, [keysReady, geminiKey, colabUrl, kaggleUrl]);
 
   function restoreSample() {
     setProject(SAMPLE);
@@ -377,15 +458,18 @@ export function StudioApp() {
 
   function onCut() {
     setError(null);
-    const next = keepPrivacy(cutChapter(draft), project);
+    const cleaned = sanitizeNovelText(draft);
+    if (cleaned !== draft) setDraft(cleaned);
+    const next = keepPrivacy(cutChapter(cleaned), project);
     setProject(next);
     setNotice(next.source === "sample" ? "Sample kept, paintings included." : "Cut on this phone. Soul and vessel are split from the names you wrote.");
     setTab(next.source === "sample" ? "strip" : "forge");
   }
 
   async function onDirect() {
-    if (!requireRights()) return;
-    const chunks = chunkChapterText(draft);
+    const cleaned = sanitizeNovelText(draft);
+    if (cleaned !== draft) setDraft(cleaned);
+    const chunks = chunkChapterText(cleaned);
     if (!chunks.length) {
       setError("Paste at least a short chapter.");
       return;
@@ -396,7 +480,7 @@ export function StudioApp() {
       for (let index = 0; index < chunks.length; index += 1) {
         setBusy(chunks.length > 1 ? `Directing part ${index + 1} of ${chunks.length}` : "Directing the chapter");
         const result = await directChapter({
-          data: { text: chunks[index], provider: aiProvider, workerUrl, workerToken },
+          data: { text: chunks[index], provider: aiProvider, workerUrl, workerToken, geminiKey: geminiKey.trim() },
         });
         if (!result.ok) {
           setError(chunks.length > 1 ? `Part ${index + 1}: ${result.error}` : result.error);
@@ -426,10 +510,6 @@ export function StudioApp() {
   }
 
   async function onFetch() {
-    if (!rights) {
-      setError("Confirm you have the rights to that page first.");
-      return;
-    }
     setError(null);
     const wantsRange = rangeStart.trim() !== "" || rangeEnd.trim() !== "";
     if (wantsRange) {
@@ -458,9 +538,9 @@ export function StudioApp() {
           }
           fetched.push({
             index: chapter,
-            title: result.title || `Chapter ${chapter}`,
+            title: sanitizeNovelText(result.title) || `Chapter ${chapter}`,
             sourceUrl: urls[index],
-            text: result.text,
+            text: sanitizeNovelText(result.text),
           });
         }
         const next = keepPrivacy(projectFromChapters(fetched), project);
@@ -484,9 +564,9 @@ export function StudioApp() {
         setError(result.error);
         return;
       }
-      const text = result.title ? `${result.title}\n\n${result.text}` : result.text;
+      const text = sanitizeNovelText(result.title ? `${result.title}\n\n${result.text}` : result.text);
       setDraft(text);
-      setNotice("Page text is in the script. Ads and navigation were dropped. The full chapter is kept. Cut it when you are ready.");
+      setNotice("Page text is in the script. Site menus, chapter counters, and WTR-LAB chrome were dropped.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "The page did not load.");
     } finally {
@@ -495,18 +575,18 @@ export function StudioApp() {
   }
 
   async function onPaint() {
-    if (!requireRights()) return;
-    const targets = project.scenes.filter((scene) => !scene.imageUrl).slice(0, 4);
+    const targets = project.scenes.filter((scene) => !scene.imageUrl);
     if (!targets.length) {
       setNotice("The open panels are already painted.");
       return;
     }
     setError(null);
-    for (const scene of targets) {
-      setBusy(`Painting panel ${scene.id}`);
+    for (let index = 0; index < targets.length; index += 1) {
+      const scene = targets[index];
+      setBusy(`Painting panel ${index + 1} of ${targets.length}`);
       try {
         const result = await paintPanel({
-          data: { prompt: scene.imagePrompt, provider: aiProvider, workerUrl, workerToken },
+          data: { prompt: scene.imagePrompt, provider: aiProvider, workerUrl, workerToken, geminiKey: geminiKey.trim() },
         });
         if (!result.ok) {
           setError(result.error);
@@ -537,40 +617,65 @@ export function StudioApp() {
 
   async function onSpeak() {
     setError(null);
+    primeSpeechUnlock();
     if (track) {
       try {
         await new Audio(track).play();
-        setNotice("Played the locked male voice.");
+        setNotice("Played the saved voice.");
       } catch {
         setError("The track is ready, but this phone blocked playback. Tap again.");
       }
       return;
     }
-    setBusy("Locking a male voice");
-    const text = project.narration;
+    const text = sanitizeNovelText(project.narration) || project.narration;
+    const synth = typeof window !== "undefined" ? window.speechSynthesis : undefined;
+    const speech = { state: "failed" as "reading" | "failed" | "done" };
+    if (synth) {
+      speech.state = "reading";
+      const known = synth.getVoices();
+      void speakOnDevice(text, chooseVoice(known, text)).then(
+        () => {
+          speech.state = "done";
+        },
+        () => {
+          speech.state = "failed";
+        },
+      );
+    }
+    setBusy("Reading the chapter");
     try {
       const result = await speakLine({
-        data: { text, voice: project.voice, provider: aiProvider, workerUrl, workerToken },
+        data: { text, voice: project.voice, provider: aiProvider, workerUrl, workerToken, geminiKey: geminiKey.trim() },
       });
       if (result.ok) {
-        const src = `data:audio/mpeg;base64,${result.audioBase64}`;
+        synth?.cancel();
+        const mime = result.mimeType || "audio/mpeg";
+        const src = `data:${mime};base64,${result.audioBase64}`;
         setTrack(src);
         try {
           await new Audio(src).play();
-          setNotice("Played the worker's male voice. No female fallback.");
+          setNotice(aiProvider === "worker" ? "Played the worker voice." : "Played the Gemini voice.");
         } catch {
-          setNotice("The male track is ready. Tap the button again to play it.");
+          setNotice("The voice track is ready. Tap Read again to play it.");
         }
         return;
       }
-      const voice = pickMaleVoice();
-      if (!voice) {
-        setError(`${result.error} This phone has no clearly male voice either, so nothing was read.`);
+      if (speech.state !== "failed") {
+        setNotice("Reading on this phone.");
         return;
       }
-      await speakOnDevice(text, voice);
-      setNotice(`Remote voice was unavailable. Read on this phone with ${voice.name}. Female voices were skipped.`);
+      const voices = await loadVoices(1200);
+      try {
+        await speakOnDevice(text, chooseVoice(voices, text));
+        setNotice("Reading on this phone.");
+      } catch {
+        setError("Voice did not start. Tap Read again — this phone only allows speech from that tap.");
+      }
     } catch (err) {
+      if (speech.state !== "failed") {
+        setNotice("Reading on this phone.");
+        return;
+      }
       setError(err instanceof Error ? err.message : "The reading stopped.");
     } finally {
       setBusy(null);
@@ -787,7 +892,7 @@ export function StudioApp() {
                 placeholder="https://worker.example.com"
                 inputMode="url"
                 autoComplete="off"
-                className="mt-2 min-h-12 w-full rounded-xl bg-ink px-3 text-base text-paper outline-none placeholder:text-muted"
+                className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted"
               />
             </label>
             <label className="block" htmlFor="worker-token">
@@ -798,7 +903,7 @@ export function StudioApp() {
                 value={workerToken}
                 onChange={(event) => setWorkerToken(event.target.value)}
                 autoComplete="off"
-                className="mt-2 min-h-12 w-full rounded-xl bg-ink px-3 text-base text-paper outline-none placeholder:text-muted"
+                className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted"
               />
             </label>
             <button
@@ -833,16 +938,43 @@ export function StudioApp() {
                   Open-source worker
                 </button>
               </div>
-              <p className="mt-3 text-sm text-paper">
-                Gemini is {aiStatus ? (aiStatus.geminiConfigured ? "configured" : "not configured") : "checking"}. Model{" "}
-                {aiStatus?.geminiModel ?? studioConfig.geminiModel}. Image model{" "}
-                {aiStatus?.geminiImageModel ?? studioConfig.geminiImageModel}.
+              <label className="mt-3 block" htmlFor="gemini-key">
+                <span className="flex items-center justify-between gap-3 text-sm font-medium text-paper">
+                  Gemini API key
+                  <button
+                    type="button"
+                    onClick={() => setRevealKey((open) => !open)}
+                    className="text-xs font-semibold text-cinnabar"
+                  >
+                    {revealKey ? "Hide" : "Show"}
+                  </button>
+                </span>
+                <input
+                  id="gemini-key"
+                  type={revealKey ? "text" : "password"}
+                  value={geminiKey}
+                  onChange={(event) => setGeminiKey(event.target.value)}
+                  placeholder="Paste a key from Google AI Studio"
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  inputMode="text"
+                  className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none"
+                />
+              </label>
+              <p className="mt-2 text-xs text-muted">
+                {geminiKey.trim()
+                  ? "Saved in this browser only. Direct, paint, and Gemini voice use this key. No model picker and no server key."
+                  : "Paste a key here. It stays in this browser. You do not pick a model, and a server environment key is not required."}
               </p>
-              <p className="mt-1 text-xs text-muted">
-                Keys are read only from the server environment. This screen never accepts a key. Grok calls are{" "}
-                {aiStatus?.xaiEnabled ? "on" : "off"}.
-              </p>
+              {geminiKey.trim() ? (
+                <button type="button" onClick={() => setGeminiKey("")} className="mt-2 min-h-11 text-sm font-semibold text-cinnabar">
+                  Clear saved key
+                </button>
+              ) : null}
             </div>
+            <BenchLinks colabUrl={colabUrl} kaggleUrl={kaggleUrl} onColab={setColabUrl} onKaggle={setKaggleUrl} />
           </section>
         ) : null}
 
@@ -851,7 +983,7 @@ export function StudioApp() {
             <div>
               <h2 className="text-3xl text-paper">Cut the chapter</h2>
               <p className="mt-2 text-sm text-muted">
-                The phone steers. Paste a story you have the rights to. One public page can be cleaned of ads and menus. Login walls stop here.
+                Paste a chapter or pull a public page. Site menus and counters are stripped before the cut, the dialogue, and the YouTube card.
               </p>
             </div>
             <label className="block">
@@ -859,18 +991,17 @@ export function StudioApp() {
               <textarea
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
-                className="mt-2 min-h-72 w-full rounded-2xl bg-paper px-4 py-3 text-base text-ink outline-none"
+                onPaste={(event) => {
+                  const pasted = event.clipboardData.getData("text");
+                  if (!pasted) return;
+                  event.preventDefault();
+                  const start = event.currentTarget.selectionStart ?? draft.length;
+                  const end = event.currentTarget.selectionEnd ?? draft.length;
+                  setDraft(sanitizeNovelText(`${draft.slice(0, start)}${pasted}${draft.slice(end)}`));
+                }}
+                className="field mt-2 min-h-72 w-full rounded-2xl px-4 py-3 text-base outline-none"
                 spellCheck
               />
-            </label>
-            <label className="flex items-start gap-3 rounded-2xl bg-ink-2 px-3 py-3">
-              <input
-                type="checkbox"
-                checked={rights}
-                onChange={(event) => setRights(event.target.checked)}
-                className="mt-1 size-5 accent-cinnabar"
-              />
-              <span className="text-sm text-paper">I have the rights to adapt this text. Do not bypass a paywall or a login.</span>
             </label>
             <div className="grid grid-cols-2 gap-2">
               <button type="button" onClick={onCut} disabled={!!busy} className="min-h-12 rounded-2xl bg-seal px-3 text-sm font-semibold text-paper disabled:opacity-50">
@@ -903,7 +1034,7 @@ export function StudioApp() {
                 onChange={(event) => setUrl(event.target.value)}
                 placeholder="https://example.com/story/chapter-{n}"
                 inputMode="url"
-                className="mt-2 min-h-12 w-full rounded-xl bg-ink px-3 text-base text-paper outline-none placeholder:text-muted"
+                className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted"
               />
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <label className="block text-sm text-paper" htmlFor="chapter-start">
@@ -914,7 +1045,7 @@ export function StudioApp() {
                     onChange={(event) => setRangeStart(event.target.value)}
                     inputMode="numeric"
                     placeholder="1"
-                    className="mt-2 min-h-12 w-full rounded-xl bg-ink px-3 text-base text-paper outline-none placeholder:text-muted"
+                    className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted"
                   />
                 </label>
                 <label className="block text-sm text-paper" htmlFor="chapter-end">
@@ -925,7 +1056,7 @@ export function StudioApp() {
                     onChange={(event) => setRangeEnd(event.target.value)}
                     inputMode="numeric"
                     placeholder="12"
-                    className="mt-2 min-h-12 w-full rounded-xl bg-ink px-3 text-base text-paper outline-none placeholder:text-muted"
+                    className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted"
                   />
                 </label>
               </div>
@@ -933,7 +1064,7 @@ export function StudioApp() {
                 {rangeStart.trim() || rangeEnd.trim() ? "Pull chapter range" : "Pull readable text"}
               </button>
               <p className="mt-2 text-xs text-muted">
-                Leave start and end empty for one page. For a range, put {"{n}"} in the link, or paste one chapter URL and the last number is replaced. Each chapter is fetched on its own. Long pages stay whole. Up to 40 chapters a pull. Private addresses stay blocked. A lock returns SOURCE_ACCESS_DENIED and asks you to paste.
+                Leave start and end empty for one page. For a range, put {"{n}"} in the link, or paste one chapter URL and the last number is replaced. The range you type is what gets pulled. Private addresses stay blocked.
               </p>
             </div>
           </section>
@@ -970,7 +1101,7 @@ export function StudioApp() {
             <button type="button" onClick={onPaint} disabled={!!busy} className="min-h-12 w-full rounded-2xl bg-seal text-sm font-semibold text-paper disabled:opacity-50">
               Paint unpainted panels
             </button>
-            <p className="text-xs text-muted">Up to four pictures, only when you ask. Text hits and bubbles are drawn afterward, never inside the painting.</p>
+            <p className="text-xs text-muted">Every unpainted panel in this chapter is painted, one after another, only when you ask. Text hits and bubbles are drawn afterward, never inside the painting.</p>
           </section>
         ) : null}
 
@@ -1006,6 +1137,7 @@ export function StudioApp() {
                   : "Kaggle is the GPU bench: a free T4 session lasts longer than Colab and will not drop mid-chapter. Colab is only the backup when you want the file in Google Drive. Neither one can be a live door from this phone, so you hand over a job packet."}
               </p>
             </div>
+            <BenchLinks colabUrl={colabUrl} kaggleUrl={kaggleUrl} onColab={setColabUrl} onKaggle={setKaggleUrl} />
             <div className="rounded-2xl bg-ink-2 p-4">
               <div className="flex items-center gap-2">
                 <Mic className="size-4 text-cinnabar" aria-hidden />
@@ -1015,7 +1147,7 @@ export function StudioApp() {
               <button type="button" onClick={onSpeak} disabled={!!busy} className="mt-3 min-h-12 w-full rounded-xl bg-seal text-sm font-semibold text-paper disabled:opacity-50">
                 Read it, male voice only
               </button>
-              <p className="mt-2 text-xs text-muted">A male voice on this phone if the worker has no track. Gemini does not speak here. A female voice is never the fallback.</p>
+              <p className="mt-2 text-xs text-muted">Gemini voice if a key is saved. Otherwise this phone reads it. Android waits for its voice list before speaking, and a missing male label no longer stops the read.</p>
             </div>
             <div className="rounded-2xl bg-ink-2 p-4">
               <h3 className="text-lg text-paper">Job packet</h3>

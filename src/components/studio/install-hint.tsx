@@ -54,21 +54,16 @@ export function InstallHint() {
   }
 
   return (
-    <aside className="mb-4 rounded-2xl bg-ink-2 p-4 hairline" aria-label="Add to Home screen">
-      <p className="text-sm font-semibold text-paper">Add to Home screen</p>
-      <p className="mt-1 text-sm text-muted">
-        Opens like an app. iPhone: Share, then Add to Home Screen. Android: the browser menu, then Install app or Add to Home screen.
-      </p>
-      <div className="mt-3 flex gap-2">
-        {promptEvent ? (
-          <button type="button" onClick={() => void install()} className="min-h-11 flex-1 rounded-xl bg-seal text-sm font-semibold text-paper">
-            Install
-          </button>
-        ) : null}
-        <button type="button" onClick={dismiss} className="min-h-11 flex-1 rounded-xl bg-panel text-sm text-paper">
-          Not now
+    <aside className="mb-2 flex h-8 max-h-8 items-center gap-2 overflow-hidden rounded-full bg-ink-2 px-3 hairline" aria-label="Add to Home screen">
+      <p className="min-w-0 flex-1 truncate text-[11px] leading-none text-muted">Add to Home screen</p>
+      {promptEvent ? (
+        <button type="button" onClick={() => void install()} className="h-6 shrink-0 rounded-full bg-seal px-2 text-[11px] font-semibold text-paper">
+          Install
         </button>
-      </div>
+      ) : null}
+      <button type="button" onClick={dismiss} className="h-6 shrink-0 rounded-full px-2 text-[11px] text-paper" aria-label="Dismiss add to home screen">
+        Close
+      </button>
     </aside>
   );
 }

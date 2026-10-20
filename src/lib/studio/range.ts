@@ -1,5 +1,6 @@
-/** Chapter-range URLs and long-text chunking. The old 8,000-character wall lives here as a chunk size, not a drop. */
-export const CHAPTER_PULL_CAP = 40;
+/** Safety stop so a mistyped end chapter cannot request thousands of pages. The old 40 cap is gone. */
+export const CHAPTER_PULL_CAP = 2000;
+
 export const CHUNK_CHARS = 8000;
 
 export function expandChapterUrls(template: string, start: number, end: number): string[] {
@@ -10,7 +11,9 @@ export function expandChapterUrls(template: string, start: number, end: number):
   }
   if (start < 0 || end < start) throw new Error("The range has to end on or after the start.");
   const count = end - start + 1;
-  if (count > CHAPTER_PULL_CAP) throw new Error(`Pull at most ${CHAPTER_PULL_CAP} chapters at a time.`);
+  if (count > CHAPTER_PULL_CAP) {
+    throw new Error(`That range is ${count} chapters. Pull at most ${CHAPTER_PULL_CAP} in one go, or narrow the start and end.`);
+  }
   const numbers: number[] = [];
   for (let n = start; n <= end; n += 1) numbers.push(n);
   if (raw.includes("{n}")) return numbers.map((n) => raw.replaceAll("{n}", String(n)));

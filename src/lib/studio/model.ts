@@ -1,3 +1,4 @@
+import { sanitizeNovelText } from "./extract.ts";
 import { DEFAULT_NEGATIVE, detectLanguage, jobPacketV2Schema, voiceFor, type JobPacketV2, type PacketChapter, type PacketScene } from "./schema.ts";
 
 export type Character = {
@@ -226,7 +227,9 @@ function parseBlocks(raw: string): { title: string; blocks: string[] } {
 }
 
 export function cutChapter(raw: string): Project {
-  const text = raw.trim();
+  const incoming = raw.trim();
+  if (incoming === SAMPLE_TEXT.trim()) return SAMPLE;
+  const text = sanitizeNovelText(incoming);
   if (text === SAMPLE_TEXT.trim()) return SAMPLE;
 
   const { title, blocks } = parseBlocks(text);
@@ -265,7 +268,7 @@ export function cutChapter(raw: string): Project {
   const characters: Character[] = [];
   const used = new Set<string>();
   for (const [name, lines] of speakers) {
-    if (characters.length >= 4) break;
+    if (characters.length >= 24) break;
     let id = slug(name);
     while (used.has(id)) id = `${id}-${used.size}`;
     used.add(id);

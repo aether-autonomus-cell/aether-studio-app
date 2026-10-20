@@ -1,7 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { AiProvider } from "@/lib/studio/config";
 import { studioConfig } from "@/lib/studio/config";
-import { htmlToText } from "@/lib/studio/extract";
+import { htmlToText, sanitizeNovelText } from "@/lib/studio/extract";
+import { fetchWtrChapter, parseWtrChapterUrl } from "@/lib/studio/wtr";
 import { assertJobId, jobResourcePath, parseJobStatus, readJobId, type JobSnapshot } from "@/lib/studio/jobs";
 import type { Character, Scene, Seo } from "@/lib/studio/model";
 import { detectLanguage, jobPacketV2Schema, voiceFor } from "@/lib/studio/schema";
@@ -23,7 +24,17 @@ function clip(text: string, max: number): string {
   return `${clean.slice(0, max - 1).trimEnd()}…`;
 }
 
-function readProvider(input: unknown): { provider: AiProvider; workerUrl: string; workerToken: string } {
+function readGeminiKey(input: unknown): string {
+  const raw =
+    typeof (input as { geminiKey?: unknown })?.geminiKey === "string"
+      ? (input as { geminiKey: string }).geminiKey
+      : "";
+  const key = raw.replace(/\s+/g, "").replace(/^["']|["']$/g, "");
+  if (key.length > 256) throw new Error("That Gemini key is too long.");
+  return key;
+}
+
+function readProvider(input: unknown): { provider: AiProvider; workerUrl: string; workerToken: string; geminiKey: string } {
   const row = input as { provider?: unknown; workerUrl?: unknown; workerToken?: unknown };
   const workerToken = typeof row?.workerToken === "string" ? row.workerToken : "";
   if (workerToken.length > 500) throw new Error("That token is too long.");
@@ -31,10 +42,12 @@ function readProvider(input: unknown): { provider: AiProvider; workerUrl: string
     provider: row?.provider === "worker" ? "worker" : "gemini",
     workerUrl: typeof row?.workerUrl === "string" ? row.workerUrl : "",
     workerToken,
+    geminiKey: readGeminiKey(input),
   };
 }
 
-function geminiKey(): string | null {
+function resolveGeminiKey(fromClient: string): string | null {
+  if (fromClient) return fromClient;
   const key = process.env.GEMINI_API_KEY?.trim();
   return key || null;
 }
@@ -117,7 +130,7 @@ async function workerPost(
 export const providerStatus = createServerFn({ method: "POST" })
   .validator(() => ({}))
   .handler(async () => ({
-    geminiConfigured: Boolean(geminiKey()),
+    geminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
     geminiModel: studioConfig.geminiModel,
     geminiImageModel: studioConfig.geminiImageModel,
     xaiEnabled: studioConfig.xaiEnabled,
@@ -140,9 +153,9 @@ export const directChapter = createServerFn({ method: "POST" })
       if (!result.ok) return result;
       content = typeof result.json === "string" ? result.json : JSON.stringify(result.json);
     } else {
-      const apiKey = geminiKey();
+      const apiKey = resolveGeminiKey(data.geminiKey);
       if (!apiKey) {
-        return { ok: false, error: "Gemini is not configured. The key stays in the server environment. Phone cut still works." };
+        return { ok: false, error: "Add a Gemini API key in Settings. It is saved only in this browser." };
       }
       const result = await geminiText(apiKey, DIRECTOR_SYSTEM, data.text);
       if (!result.ok) return result;
@@ -182,8 +195,8 @@ export const paintPanel = createServerFn({ method: "POST" })
       }
       return { ok: false, error: "The worker returned no image." };
     }
-    const apiKey = geminiKey();
-    if (!apiKey) return { ok: false, error: "Gemini is not configured. The key stays in the server environment." };
+    const apiKey = resolveGeminiKey(data.geminiKey);
+    if (!apiKey) return { ok: false, error: "Add a Gemini API key in Settings. It is saved only in this browser." };
     let res: Response;
     try {
       res = await fetch(
@@ -220,24 +233,120 @@ export const speakLine = createServerFn({ method: "POST" })
     const text = typeof row?.text === "string" ? row.text.trim() : "";
     if (text.length < 2) throw new Error("Nothing to read.");
     const voice = typeof row?.voice === "string" ? row.voice : "";
-    return { text: text.slice(0, 700), voice, ...readProvider(input) };
+    return { text: text.slice(0, 12000), voice, ...readProvider(input) };
   })
-  .handler(async ({ data }): Promise<{ ok: true; audioBase64: string } | { ok: false; error: string }> => {
+  .handler(async ({ data }): Promise<{ ok: true; audioBase64: string; mimeType: string } | { ok: false; error: string }> => {
     const language = detectLanguage(data.text);
-    if (data.provider !== "worker") {
-      return { ok: false, error: "Gemini has no male voice in this studio." };
+    if (data.provider === "worker") {
+      const result = await workerPost("/api/v1/speak", data.workerUrl, data.workerToken, {
+        text: data.text.slice(0, 700),
+        language,
+        voice: voiceFor(language, data.voice),
+      });
+      if (result.ok) {
+        const row = result.json && typeof result.json === "object" ? (result.json as Record<string, unknown>) : {};
+        const audio = typeof row.audioBase64 === "string" ? row.audioBase64 : "";
+        if (audio.length >= 100) {
+          const mimeType = typeof row.mimeType === "string" && row.mimeType ? row.mimeType : "audio/mpeg";
+          return { ok: true, audioBase64: audio, mimeType };
+        }
+      }
     }
-    const result = await workerPost("/api/v1/speak", data.workerUrl, data.workerToken, {
-      text: data.text,
-      language,
-      voice: voiceFor(language, data.voice),
-    });
-    if (!result.ok) return result;
-    const row = result.json && typeof result.json === "object" ? (result.json as Record<string, unknown>) : {};
-    const audio = typeof row.audioBase64 === "string" ? row.audioBase64 : "";
-    if (audio.length < 100) return { ok: false, error: "The worker voice track came back empty." };
-    return { ok: true, audioBase64: audio };
+    const apiKey = resolveGeminiKey(data.geminiKey);
+    if (!apiKey) return { ok: false, error: "No remote voice. Reading on this phone instead." };
+    return geminiSpeak(apiKey, data.text);
   });
+
+function pcm16ToWav(pcm: Buffer, sampleRate: number): Buffer {
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
+}
+
+function speechChunks(text: string): string[] {
+  const parts: string[] = [];
+  let rest = text.trim();
+  while (rest && parts.length < 20) {
+    if (rest.length <= 700) {
+      parts.push(rest);
+      break;
+    }
+    let cut = rest.lastIndexOf(". ", 700);
+    if (cut < 180) cut = rest.lastIndexOf(" ", 700);
+    if (cut < 80) cut = 700;
+    const piece = rest.slice(0, cut + 1).trim();
+    if (piece) parts.push(piece);
+    rest = rest.slice(piece ? cut + 1 : 700).trim();
+  }
+  return parts;
+}
+
+async function geminiSpeak(
+  apiKey: string,
+  text: string,
+): Promise<{ ok: true; audioBase64: string; mimeType: string } | { ok: false; error: string }> {
+  const pieces = speechChunks(text);
+  if (!pieces.length) return { ok: false, error: "Nothing to read." };
+  const pcmParts: Buffer[] = [];
+  let sampleRate = 24000;
+  for (const piece of pieces) {
+    let res: Response;
+    try {
+      res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${studioConfig.geminiTtsModel}:generateContent`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+          signal: AbortSignal.timeout(45000),
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: piece }] }],
+            generationConfig: {
+              responseModalities: ["AUDIO"],
+              speechConfig: {
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: studioConfig.geminiVoice } },
+              },
+            },
+          }),
+        },
+      );
+    } catch {
+      return { ok: false, error: "Gemini voice did not answer." };
+    }
+    if (!res.ok) return { ok: false, error: `Gemini voice could not read that (${res.status}).` };
+    let body: { candidates?: { content?: { parts?: { inlineData?: { mimeType?: string; data?: string } }[] } }[] };
+    try {
+      body = JSON.parse(await res.text()) as typeof body;
+    } catch {
+      return { ok: false, error: "Gemini voice returned something this studio could not read." };
+    }
+    const inline = body.candidates?.[0]?.content?.parts?.find((part) => part.inlineData?.data)?.inlineData;
+    if (!inline?.data) return { ok: false, error: "Gemini voice returned no audio." };
+    const mime = inline.mimeType || "audio/L16;rate=24000";
+    if (!/l16|pcm|raw/i.test(mime)) {
+      if (!pcmParts.length) {
+        return { ok: true, audioBase64: inline.data, mimeType: mime.split(";")[0] || "audio/wav" };
+      }
+      break;
+    }
+    const rate = mime.match(/rate=(\d+)/i);
+    if (rate) sampleRate = Number(rate[1]) || sampleRate;
+    pcmParts.push(Buffer.from(inline.data, "base64"));
+  }
+  const wav = pcm16ToWav(Buffer.concat(pcmParts), sampleRate);
+  return { ok: true, audioBase64: wav.toString("base64"), mimeType: "audio/wav" };
+}
 
 function asText(value: unknown, max: number): string {
   return typeof value === "string" ? clip(value, max) : "";
@@ -348,6 +457,150 @@ async function assertPublic(hostname: string): Promise<string | null> {
   return null;
 }
 
+const PAGE_HEADERS: Record<string, string> = {
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.7",
+  "Accept-Language": "en-US,en;q=0.9,hi;q=0.8",
+  "User-Agent":
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+  "Cache-Control": "no-cache",
+  Pragma: "no-cache",
+  "Upgrade-Insecure-Requests": "1",
+  "Sec-Fetch-Dest": "document",
+  "Sec-Fetch-Mode": "navigate",
+  "Sec-Fetch-Site": "none",
+  "Sec-Fetch-User": "?1",
+};
+
+const DESKTOP_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+const GOOGLEBOT_UA = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+
+function looksLikeChallenge(html: string): boolean {
+  const head = html.slice(0, 6000).toLowerCase();
+  return /just a moment|cf-browser-verification|challenge-platform|cf-chl-|attention required|enable javascript and cookies|cdn-cgi\/challenge/.test(
+    head,
+  );
+}
+
+function looksLikePaywall(text: string): boolean {
+  if (text.length >= 500) return false;
+  return /sign in|log in|login|subscribe|paywall|chapter locked|purchase to read|members only/.test(text.toLowerCase());
+}
+
+async function readHtml(url: URL): Promise<{ ok: true; html: string; finalUrl: URL } | { ok: false; code: string; error: string }> {
+  const agents = [PAGE_HEADERS["User-Agent"], DESKTOP_UA, GOOGLEBOT_UA];
+  let last: { ok: false; code: string; error: string } = { ok: false, code: "FETCH_FAILED", error: "The page did not answer." };
+  for (const agent of agents) {
+    let current = url;
+    let blockedEarly = false;
+    for (let hop = 0; hop < 4; hop += 1) {
+      const blocked = await assertPublic(current.hostname);
+      if (blocked) return { ok: false, code: "SSRF_BLOCKED", error: blocked };
+      let res: Response;
+      try {
+        res = await fetch(current, {
+          redirect: "manual",
+          signal: AbortSignal.timeout(15000),
+          headers: { ...PAGE_HEADERS, "User-Agent": agent },
+        });
+      } catch {
+        last = { ok: false, code: "FETCH_FAILED", error: "The page did not answer." };
+        blockedEarly = true;
+        break;
+      }
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        if (!location) {
+          last = { ok: false, code: "FETCH_FAILED", error: "The page redirected nowhere." };
+          blockedEarly = true;
+          break;
+        }
+        current = new URL(location, current);
+        continue;
+      }
+      if (res.status === 401 || res.status === 402) {
+        last = {
+          ok: false,
+          code: "SOURCE_ACCESS_DENIED",
+          error: "This page wants a login. Paste the chapter text instead.",
+        };
+        blockedEarly = true;
+        break;
+      }
+      if (res.status === 403 || res.status === 429 || res.status === 503) {
+        last = { ok: false, code: "FETCH_BLOCKED", error: "The site blocked a direct fetch." };
+        break;
+      }
+      if (!res.ok) {
+        last = { ok: false, code: "FETCH_FAILED", error: `The page returned ${res.status}.` };
+        break;
+      }
+      const reader = res.body?.getReader();
+      if (!reader) {
+        last = { ok: false, code: "FETCH_FAILED", error: "The page was empty." };
+        break;
+      }
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      while (total < 500_000) {
+        const step = await reader.read();
+        if (step.done) break;
+        total += step.value.byteLength;
+        chunks.push(step.value);
+      }
+      reader.cancel().catch(() => undefined);
+      const html = Buffer.concat(chunks).toString("utf8");
+      if (looksLikeChallenge(html)) {
+        last = { ok: false, code: "FETCH_BLOCKED", error: "The site blocked a direct fetch." };
+        if (html.length > 8000) {
+          const embedded = htmlToText(html);
+          if (embedded.text.length >= 80 && !looksLikePaywall(embedded.text)) {
+            return { ok: true, html, finalUrl: current };
+          }
+        }
+        break;
+      }
+      return { ok: true, html, finalUrl: current };
+    }
+    if (blockedEarly) return last;
+  }
+  return last;
+}
+
+async function readViaReader(pageUrl: string): Promise<{ title: string; text: string } | null> {
+  let endpoint: URL;
+  try {
+    endpoint = new URL(`https://r.jina.ai/${pageUrl}`);
+  } catch {
+    return null;
+  }
+  const blocked = await assertPublic(endpoint.hostname);
+  if (blocked) return null;
+  let res: Response;
+  try {
+    res = await fetch(endpoint, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(20000),
+      headers: {
+        Accept: "text/plain, text/markdown, */*",
+        "User-Agent": PAGE_HEADERS["User-Agent"],
+        "X-Return-Format": "markdown",
+      },
+    });
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  const raw = (await res.text()).slice(0, 500_000);
+  const titleLine = raw.match(/^Title:\s*(.+)$/m);
+  const body = raw.replace(/^Title:\s*.+$/m, "").replace(/^URL Source:\s*.+$/m, "").replace(/^Markdown Content:\s*/m, "");
+  const extracted = htmlToText(`<title>${titleLine?.[1] ?? ""}</title><article><p>${body}</p></article>`);
+  const text = extracted.text;
+  if (text.length < 80 || looksLikeChallenge(raw) || looksLikePaywall(text)) return null;
+  return { title: extracted.title || titleLine?.[1]?.trim() || "", text };
+}
+
 export const fetchSource = createServerFn({ method: "POST" })
   .validator((input: unknown) => {
     const url = typeof (input as { url?: unknown })?.url === "string" ? (input as { url: string }).url.trim() : "";
@@ -361,66 +614,67 @@ export const fetchSource = createServerFn({ method: "POST" })
     return { url: parsed.toString() };
   })
   .handler(async ({ data }): Promise<{ ok: true; title: string; text: string } | { ok: false; code: string; error: string }> => {
-    let current = new URL(data.url);
-    for (let hop = 0; hop < 3; hop += 1) {
-      const blocked = await assertPublic(current.hostname);
-      if (blocked) return { ok: false, code: "SSRF_BLOCKED", error: blocked };
-      let res: Response;
+    const page = new URL(data.url);
+    const blocked = await assertPublic(page.hostname);
+    if (blocked) return { ok: false, code: "SSRF_BLOCKED", error: blocked };
+
+    const wtr = parseWtrChapterUrl(data.url);
+    if (wtr) {
       try {
-        res = await fetch(current, {
-          redirect: "manual",
-          signal: AbortSignal.timeout(8000),
-          headers: { Accept: "text/html,text/plain;q=0.9", "User-Agent": "AetherStudio/1.0" },
-        });
+        const chapter = await fetchWtrChapter(wtr);
+        if (chapter && chapter.text.length >= 80) {
+          const text = sanitizeNovelText(chapter.text);
+          const title = sanitizeNovelText(chapter.title);
+          if (text.length >= 80) return { ok: true, title: title || page.hostname, text };
+        }
       } catch {
-        return { ok: false, code: "FETCH_FAILED", error: "The page did not answer." };
+        /* fall through to a normal page read */
       }
-      if (res.status >= 300 && res.status < 400) {
-        const location = res.headers.get("location");
-        if (!location) return { ok: false, code: "FETCH_FAILED", error: "The page redirected nowhere." };
-        current = new URL(location, current);
-        continue;
-      }
-      if (res.status === 401 || res.status === 403 || res.status === 402) {
-        return {
-          ok: false,
-          code: "SOURCE_ACCESS_DENIED",
-          error: "SOURCE_ACCESS_DENIED. This page is locked. Paste the chapter text instead. Paywalls are not bypassed.",
-        };
-      }
-      if (!res.ok) return { ok: false, code: "FETCH_FAILED", error: `The page returned ${res.status}.` };
-      const type = res.headers.get("content-type") ?? "";
-      if (!/text\/html|text\/plain|application\/xhtml/.test(type)) {
-        return { ok: false, code: "FETCH_FAILED", error: "That link is not a text page." };
-      }
-      const reader = res.body?.getReader();
-      if (!reader) return { ok: false, code: "FETCH_FAILED", error: "The page was empty." };
-      const chunks: Uint8Array[] = [];
-      let total = 0;
-      while (total < 350_000) {
-        const step = await reader.read();
-        if (step.done) break;
-        total += step.value.byteLength;
-        chunks.push(step.value);
-      }
-      reader.cancel().catch(() => undefined);
-      const html = Buffer.concat(chunks).toString("utf8");
-      const extracted = htmlToText(html);
-      const lowered = extracted.text.toLowerCase();
-      const locked =
-        extracted.text.length < 500 &&
-        /sign in|log in|login|subscribe|paywall|chapter locked|purchase to read|members only/.test(lowered);
-      if (locked || extracted.text.length < 80) {
-        return {
-          ok: false,
-          code: "SOURCE_ACCESS_DENIED",
-          error: "SOURCE_ACCESS_DENIED. No readable chapter here, or the page wants a login. Paste the text. Paywalls are not bypassed.",
-        };
-      }
-      const title = extracted.title || current.hostname;
-      return { ok: true, title, text: extracted.text };
     }
-    return { ok: false, code: "FETCH_FAILED", error: "Too many redirects." };
+
+    const direct = await readHtml(page);
+    if (direct.ok) {
+      const challenge = looksLikeChallenge(direct.html);
+      const extracted = htmlToText(direct.html);
+      if (!challenge && extracted.text.length >= 80 && !looksLikePaywall(extracted.text)) {
+        return { ok: true, title: extracted.title || direct.finalUrl.hostname, text: extracted.text };
+      }
+    } else if (direct.code === "SSRF_BLOCKED") {
+      return direct;
+    }
+
+    const fallback = await readViaReader(data.url);
+    if (fallback) {
+      return { ok: true, title: fallback.title || page.hostname, text: fallback.text };
+    }
+
+    if (direct.ok && looksLikeChallenge(direct.html)) {
+      return {
+        ok: false,
+        code: "FETCH_BLOCKED",
+        error: "The site blocked the fetch (Cloudflare or a script-only page). Paste the chapter. This is not a paywall.",
+      };
+    }
+    if (!direct.ok && direct.code === "FETCH_BLOCKED") {
+      return {
+        ok: false,
+        code: "FETCH_BLOCKED",
+        error: "The site blocked the fetch. Paste the chapter text. A block is not treated as a paywall.",
+      };
+    }
+    if (!direct.ok && direct.code === "SOURCE_ACCESS_DENIED") {
+      return {
+        ok: false,
+        code: "SOURCE_ACCESS_DENIED",
+        error: "This page wants a login. Paste the chapter text instead. A block is not treated as a paywall.",
+      };
+    }
+    if (!direct.ok) return direct;
+    return {
+      ok: false,
+      code: "FETCH_FAILED",
+      error: "No chapter text on that page. Paste it instead.",
+    };
   });
 
 function redact(raw: string, secret: string, max = 280): string {
