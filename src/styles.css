@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --color-ink: #14110f;
+  --color-ink-2: #1c1815;
+  --color-panel: #26201c;
+  --color-line: #3c332c;
+  --color-paper: #f3eadb;
+  --color-muted: #a39484;
+  --color-cinnabar: #e24b32;
+  --color-seal: #9e2616;
+  --color-fg: #f6f0e6;
+  --shadow-hairline: 0 0 0 1px rgba(243, 234, 219, 0.1);
+}
+
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  html {
+    color-scheme: dark;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-ink);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+    overflow-x: hidden;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@utility hairline {
+  box-shadow: var(--shadow-hairline);
+}
+
+.screen-pad {
+  padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
+}
+
+.dock-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.sfx-hit {
+  text-shadow: 0 2px 0 #14110f;
+}
+
+.grow-bar {
+  transform-origin: left;
+  animation: aether-grow 1.1s ease-in-out infinite;
+}
+
+@keyframes aether-grow {
+  0% {
+    transform: scaleX(0.08);
+  }
+  100% {
+    transform: scaleX(1);
+  }
+}
