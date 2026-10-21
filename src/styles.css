@@ -11,6 +11,8 @@
   --color-muted: #a39484;
   --color-cinnabar: #e24b32;
   --color-seal: #9e2616;
+  --color-ok: #1f7a4d;
+  --color-ok-ink: #e7f6ee;
   --color-fg: #f6f0e6;
   --shadow-hairline: 0 0 0 1px rgba(243, 234, 219, 0.1);
 }
@@ -97,6 +99,11 @@
   -webkit-box-shadow: 0 0 0 1000px #f3eadb inset !important;
   -webkit-text-fill-color: #14110f !important;
   caret-color: #9e2616;
+}
+
+.badge-ok {
+  background: var(--color-ok);
+  color: var(--color-ok-ink);
 }
 
 .grow-bar {

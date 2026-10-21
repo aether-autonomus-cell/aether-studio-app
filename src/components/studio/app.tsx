@@ -1,21 +1,47 @@
 import { useEffect, useRef, useState } from "react";
 import { Clapperboard, Download, Factory, Mic, ScrollText, Settings, Sparkles, Youtube } from "lucide-react";
-import { InstallHint } from "@/components/studio/install-hint";
-import { directChapter, fetchSource, jobStatus, paintPanel, speakLine, submitJob, testWorker } from "@/lib/studio/api";
-import type { AiProvider } from "@/lib/studio/config";
-import { chooseVoice, downloadBlob, loadVoices, primeSpeechUnlock, renderStripPng, speakOnDevice } from "@/lib/studio/export";
+import {
+  directChapter,
+  fetchSource,
+  jobStatus,
+  paintPanel,
+  speakLine,
+  submitJob,
+  testWorker,
+  uploadYoutube,
+  verifyCloud,
+} from "@/lib/studio/api";
+import {
+  EXPLAIN_VOICES,
+  LOCAL_MODES,
+  PROVIDER_PRESETS,
+  defaultModel,
+  type CloudProvider,
+  type LocalMode,
+} from "@/lib/studio/ai-router";
+import { chooseVoice, downloadBlob, loadVoices, primeSpeechUnlock, speakOnDevice } from "@/lib/studio/export";
 import { sanitizeNovelText } from "@/lib/studio/extract";
 import type { JobSnapshot } from "@/lib/studio/jobs";
-import { FACTORY_CELL, SAMPLE, SAMPLE_TEXT, cutChapter, dialogueWithoutSpeaker, jobPacket, mergeCuts, projectFromChapters, youtubePrivacy, type Project, type Scene, type YoutubePrivacy } from "@/lib/studio/model";
+import {
+  FACTORY_CELL,
+  SAMPLE,
+  SAMPLE_TEXT,
+  dialogueWithoutSpeaker,
+  jobPacket,
+  mergeCuts,
+  projectFromChapters,
+  projectWithAbsoluteArt,
+  youtubePrivacy,
+  type Project,
+  type Scene,
+} from "@/lib/studio/model";
 import { chunkChapterText, expandChapterUrls } from "@/lib/studio/range";
+import { containsHan } from "@/lib/studio/wtr";
 
 type Tab = "story" | "forge" | "strip" | "bay" | "youtube";
-type WorkerMode = "live" | "packet";
+type Aspect = "16:9" | "9:16";
 
-const STORAGE_KEY = "aether-studio-v1";
-const SESSION_KEY = "aether-worker-session";
-const GEMINI_KEY_STORAGE = "aether-gemini-key";
-const BENCH_KEY = "aether-bench-urls";
+const PROVIDER_IDS = Object.keys(PROVIDER_PRESETS) as CloudProvider[];
 
 function safeHttp(value: string): string | null {
   try {
@@ -29,8 +55,8 @@ function safeHttp(value: string): string | null {
 
 function sourceLabel(source: Project["source"]): string {
   if (source === "sample") return "Sample painted";
-  if (source === "grok") return "Directed";
-  return "Phone cut";
+  if (source === "grok") return "AI recap";
+  return "Fetched chapter";
 }
 
 async function copyText(value: string): Promise<boolean> {
@@ -78,430 +104,222 @@ function parseTags(value: string): string[] {
   return tags;
 }
 
-const PRIVACY_COPY: Record<YoutubePrivacy, string> = {
-  public: "Anyone could watch it, once you upload it yourself.",
-  unlisted: "Only people with the link, once you upload it yourself.",
-  private: "Only you, once you upload it yourself.",
-};
+function wipeLegacySecrets() {
+  const sweep = (storage: Storage) => {
+    const doomed: string[] = [];
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key && key.startsWith("aether-")) doomed.push(key);
+    }
+    for (const key of doomed) storage.removeItem(key);
+  };
+  try {
+    sweep(localStorage);
+  } catch {
+    /* private mode */
+  }
+  try {
+    sweep(sessionStorage);
+  } catch {
+    /* private mode */
+  }
+}
+
+type TokenClient = { requestAccessToken: (opts?: { prompt?: string }) => void };
+
+function googleAccounts():
+  | {
+      accounts: {
+        oauth2: {
+          initTokenClient: (cfg: {
+            client_id: string;
+            scope: string;
+            callback: (resp: { access_token?: string; error?: string }) => void;
+          }) => TokenClient;
+        };
+      };
+    }
+  | undefined {
+  return (window as unknown as { google?: ReturnType<typeof googleAccounts> }).google;
+}
+
+function loadGis(): Promise<void> {
+  if (googleAccounts()?.accounts?.oauth2) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const previous = document.querySelector<HTMLScriptElement>("script[data-aether-gis]");
+    if (previous) {
+      previous.addEventListener("load", () => resolve(), { once: true });
+      previous.addEventListener("error", () => reject(new Error("Google sign-in did not load.")), { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.dataset.aetherGis = "1";
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Google sign-in did not load."));
+    document.head.appendChild(script);
+  });
+}
 
 function PanelArt({ scene, wide }: { scene: Scene; wide: boolean }) {
   const line = dialogueWithoutSpeaker(scene);
   const art = scene.imageUrl ? (
-    <img
-      src={scene.imageUrl}
-      alt={scene.caption || line || "Panel"}
-      className={wide ? "h-full w-full object-cover" : "aspect-[2/3] w-full object-cover"}
-    />
+    <img src={scene.imageUrl} alt={scene.caption || line || "Panel"} className={wide ? "h-full w-full object-cover" : "aspect-[2/3] w-full object-cover"} />
   ) : (
     <div className={`flex items-end justify-center bg-panel pb-4 ${wide ? "h-full w-full" : "aspect-[2/3] w-full"}`}>
       <p className="text-xs font-semibold tracking-widest text-muted uppercase">Not painted</p>
     </div>
   );
-  const hit = scene.sfx ? (
-    <p className={`sfx-hit pointer-events-none absolute top-3 left-3 z-10 font-display text-cinnabar italic ${wide ? "text-3xl" : "text-5xl"}`}>
-      {scene.sfx}
-    </p>
-  ) : null;
-
   return (
     <figure className="rounded-2xl bg-ink-2 hairline">
       <div className={`relative overflow-hidden rounded-t-2xl bg-ink ${wide ? "aspect-video" : ""}`}>
-        {wide && scene.imageUrl ? (
-          <img src={scene.imageUrl} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-50 blur-xl" />
+        {art}
+        {scene.sfx ? (
+          <p className={`sfx-hit pointer-events-none absolute top-3 left-3 z-10 font-display text-cinnabar italic ${wide ? "text-3xl" : "text-5xl"}`}>{scene.sfx}</p>
         ) : null}
-        {wide ? (
-          <div className="absolute inset-y-0 left-1/2 w-2/5 -translate-x-1/2 overflow-hidden">
-            {art}
-            {hit}
-          </div>
-        ) : (
-          <>
-            {art}
-            {hit}
-          </>
-        )}
       </div>
       {line ? (
         <div className="mx-3 mt-3 rounded-2xl bg-paper px-4 py-3 text-ink">
-          {scene.speaker ? (
-            <p className="mb-1.5 text-xs font-semibold tracking-widest text-seal uppercase">{scene.speaker}</p>
-          ) : null}
+          {scene.speaker ? <p className="mb-1.5 text-xs font-semibold tracking-widest text-seal uppercase">{scene.speaker}</p> : null}
           <p className="font-display text-lg leading-snug break-words text-ink">{line}</p>
         </div>
       ) : null}
-      {scene.caption ? (
-        <p className="px-4 pt-3 pb-4 text-sm leading-relaxed break-words text-paper">{scene.caption}</p>
-      ) : (
-        <div className="h-3" />
-      )}
+      {scene.caption ? <p className="px-4 pt-3 pb-4 text-sm leading-relaxed break-words text-paper">{scene.caption}</p> : <div className="h-3" />}
     </figure>
   );
 }
 
-function YoutubePreview({
-  project,
-  onChange,
-  onCopyCard,
-}: {
-  project: Project;
-  onChange: (seo: Partial<Project["seo"]>) => void;
-  onCopyCard: (text: string) => void;
-}) {
-  const privacy = youtubePrivacy(project.seo.privacy);
-  const thumb = project.scenes.find((scene) => scene.imageUrl)?.imageUrl ?? null;
-  const tagsKey = project.seo.tags.join("|");
-  const [tagDraft, setTagDraft] = useState(project.seo.tags.join(", "));
-  const seenTags = useRef(tagsKey);
-  useEffect(() => {
-    if (seenTags.current === tagsKey) return;
-    seenTags.current = tagsKey;
-    setTagDraft(project.seo.tags.join(", "));
-  }, [tagsKey, project.seo.tags]);
-
-  function cardText(tags: string[]): string {
-    const title = sanitizeNovelText(project.seo.title) || project.seo.title;
-    const description = sanitizeNovelText(project.seo.description) || project.seo.description;
-    return `${title}\n\n${description}\n\n${tags.join(", ")}\n\nPrivacy: ${privacy}`;
-  }
-
-  return (
-    <section className="space-y-4" aria-labelledby="youtube-heading">
-      <div>
-        <h2 id="youtube-heading" className="text-3xl text-paper">
-          YouTube card
-        </h2>
-        <p className="mt-2 text-sm text-muted">
-          Preview only. Sign-in is not connected, so nothing is uploaded. Paste this onto your own channel when you are ready.
-        </p>
-      </div>
-      <article className="overflow-hidden rounded-2xl bg-ink-2 hairline">
-        <div className="relative aspect-video bg-ink">
-          {thumb ? (
-            <img src={thumb} alt="" className="h-full w-full object-cover" />
-          ) : (
-            <div className="flex h-full items-end justify-center pb-4">
-              <p className="text-xs font-semibold tracking-widest text-muted uppercase">Not painted</p>
-            </div>
-          )}
-          <p className="absolute top-3 left-3 rounded-full bg-ink/90 px-3 py-1 text-[10px] font-semibold tracking-widest text-cinnabar uppercase">
-            Not uploaded
-          </p>
-        </div>
-        <div className="space-y-4 p-4">
-          <label className="block" htmlFor="yt-title">
-            <span className="flex items-baseline justify-between gap-3 text-sm font-medium text-paper">
-              Title
-              <span className="text-xs font-normal text-muted">{project.seo.title.length}/100</span>
-            </span>
-            <input
-              id="yt-title"
-              value={project.seo.title}
-              maxLength={100}
-              onChange={(event) => onChange({ title: event.target.value })}
-              className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none"
-            />
-          </label>
-          <label className="block" htmlFor="yt-description">
-            <span className="flex items-baseline justify-between gap-3 text-sm font-medium text-paper">
-              Description
-              <span className="text-xs font-normal text-muted">{project.seo.description.length}/5000</span>
-            </span>
-            <textarea
-              id="yt-description"
-              value={project.seo.description}
-              maxLength={5000}
-              onChange={(event) => onChange({ description: event.target.value })}
-              className="field mt-2 min-h-32 w-full rounded-xl px-3 py-3 text-base outline-none"
-            />
-          </label>
-          <label className="block" htmlFor="yt-tags">
-            <span className="text-sm font-medium text-paper">Tags</span>
-            <input
-              id="yt-tags"
-              value={tagDraft}
-              onChange={(event) => setTagDraft(event.target.value)}
-              onBlur={() => {
-                const tags = parseTags(tagDraft);
-                seenTags.current = tags.join("|");
-                onChange({ tags });
-                setTagDraft(tags.join(", "));
-              }}
-              placeholder="motion comic, manhua"
-              className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted"
-            />
-            <span className="mt-2 block text-xs text-muted">Comma-separated. Fifteen tags at most. Not a sign-in.</span>
-          </label>
-          <fieldset>
-            <legend className="text-sm font-medium text-paper">Privacy</legend>
-            <div className="mt-2 grid grid-cols-3 gap-2" role="group" aria-label="Privacy">
-              {(["public", "unlisted", "private"] as const).map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  aria-pressed={privacy === option}
-                  onClick={() => onChange({ privacy: option })}
-                  className={`min-h-11 rounded-xl px-2 text-sm font-semibold capitalize ${privacy === option ? "bg-seal text-paper" : "bg-panel text-paper"}`}
-                >
-                  {option}
-                </button>
-              ))}
-            </div>
-            <p className="mt-2 text-xs text-muted">{PRIVACY_COPY[privacy]}</p>
-          </fieldset>
-          <button
-            type="button"
-            onClick={() => {
-              const tags = parseTags(tagDraft);
-              seenTags.current = tags.join("|");
-              onChange({ tags });
-              setTagDraft(tags.join(", "));
-              onCopyCard(cardText(tags));
-            }}
-            className="min-h-12 w-full rounded-xl bg-panel text-sm font-semibold text-paper"
-          >
-            Copy card
-          </button>
-        </div>
-      </article>
-    </section>
-  );
-}
-
-function BenchLinks({
-  colabUrl,
-  kaggleUrl,
-  onColab,
-  onKaggle,
-}: {
-  colabUrl: string;
-  kaggleUrl: string;
-  onColab: (value: string) => void;
-  onKaggle: (value: string) => void;
-}) {
-  const colab = safeHttp(colabUrl);
-  const kaggle = safeHttp(kaggleUrl);
-  return (
-    <div className="space-y-3 rounded-2xl bg-ink-2 p-4">
-      <h3 className="text-lg text-paper">Colab and Kaggle</h3>
-      <p className="text-xs text-muted">Saved on this phone. Switch notebooks without retyping. The job packet is still what you upload.</p>
-      <label className="block" htmlFor="colab-url">
-        <span className="text-sm font-medium text-paper">Colab URL</span>
-        <input
-          id="colab-url"
-          value={colabUrl}
-          onChange={(event) => onColab(event.target.value)}
-          placeholder="https://colab.research.google.com/drive/…"
-          inputMode="url"
-          autoComplete="off"
-          className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted"
-        />
-      </label>
-      <a
-        href={colab ?? undefined}
-        target="_blank"
-        rel="noreferrer"
-        aria-disabled={!colab}
-        className={`flex min-h-11 items-center justify-center rounded-xl bg-panel text-sm font-semibold text-paper ${colab ? "" : "pointer-events-none opacity-50"}`}
-      >
-        Open Colab
-      </a>
-      <label className="block" htmlFor="kaggle-url">
-        <span className="text-sm font-medium text-paper">Kaggle URL</span>
-        <input
-          id="kaggle-url"
-          value={kaggleUrl}
-          onChange={(event) => onKaggle(event.target.value)}
-          placeholder="https://www.kaggle.com/code/…"
-          inputMode="url"
-          autoComplete="off"
-          className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted"
-        />
-      </label>
-      <a
-        href={kaggle ?? undefined}
-        target="_blank"
-        rel="noreferrer"
-        aria-disabled={!kaggle}
-        className={`flex min-h-11 items-center justify-center rounded-xl bg-panel text-sm font-semibold text-paper ${kaggle ? "" : "pointer-events-none opacity-50"}`}
-      >
-        Open Kaggle
-      </a>
-    </div>
-  );
-}
-
 export function StudioApp() {
-  const [tab, setTab] = useState<Tab>("strip");
+  const [tab, setTab] = useState<Tab>("story");
   const [project, setProject] = useState<Project>(SAMPLE);
   const [draft, setDraft] = useState(SAMPLE_TEXT);
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [wide, setWide] = useState(false);
   const [showCell, setShowCell] = useState(false);
   const [track, setTrack] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [workerMode, setWorkerMode] = useState<WorkerMode>("packet");
   const [workerUrl, setWorkerUrl] = useState("");
   const [workerToken, setWorkerToken] = useState("");
-  const [aiProvider, setAiProvider] = useState<AiProvider>("gemini");
-  const [geminiKey, setGeminiKey] = useState("");
+  const [provider, setProvider] = useState<CloudProvider>("zai");
+  const [modelId, setModelId] = useState(defaultModel("zai"));
+  const [customModel, setCustomModel] = useState("");
+  const [customBase, setCustomBase] = useState("");
+  const [apiKey, setApiKey] = useState("");
   const [revealKey, setRevealKey] = useState(false);
+  const [apiBadge, setApiBadge] = useState<string | null>(null);
+  const [workerBadge, setWorkerBadge] = useState<string | null>(null);
+  const [localModel, setLocalModel] = useState<LocalMode>("gguf");
+  const [language, setLanguage] = useState<"hi" | "en">("en");
+  const [aspect, setAspect] = useState<Aspect>("16:9");
   const [colabUrl, setColabUrl] = useState("");
   const [kaggleUrl, setKaggleUrl] = useState("");
-  const [keysReady, setKeysReady] = useState(false);
-  const [sessionReady, setSessionReady] = useState(false);
   const [rangeStart, setRangeStart] = useState("");
   const [rangeEnd, setRangeEnd] = useState("");
   const [job, setJob] = useState<JobSnapshot | null>(null);
+  const [ytClientId, setYtClientId] = useState("");
+  const [ytToken, setYtToken] = useState("");
+  const [ytEmail, setYtEmail] = useState("");
+  const [ytChannel, setYtChannel] = useState("");
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [watchUrl, setWatchUrl] = useState<string | null>(null);
+  const [tagDraft, setTagDraft] = useState(SAMPLE.seo.tags.join(", "));
+  const seenTags = useRef(SAMPLE.seo.tags.join("|"));
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (!saved) return;
-      const parsed = JSON.parse(saved) as { project?: Project; draft?: string };
-      if (parsed.project?.scenes?.length && parsed.project.text) {
-        setProject(parsed.project);
-        setDraft(parsed.draft || parsed.project.text);
-      }
-    } catch {
-      localStorage.removeItem(STORAGE_KEY);
-    }
+    wipeLegacySecrets();
   }, []);
 
   useEffect(() => {
-    try {
-      const slim: Project = {
-        ...project,
-        scenes: project.scenes.map((scene) => ({
-          ...scene,
-          imageUrl: scene.imageUrl && !scene.imageUrl.startsWith("/") ? null : scene.imageUrl,
-        })),
-      };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ project: slim, draft }));
-    } catch {
-      /* private mode or a full store — the session still works */
-    }
-  }, [project, draft]);
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
 
-  useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem(SESSION_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as {
-        mode?: string;
-        workerUrl?: string;
-        workerToken?: string;
-        provider?: string;
-        job?: JobSnapshot;
-      };
-      setWorkerMode(parsed.mode === "live" ? "live" : "packet");
-      setWorkerUrl(typeof parsed.workerUrl === "string" ? parsed.workerUrl : "");
-      setWorkerToken(typeof parsed.workerToken === "string" ? parsed.workerToken : "");
-      setAiProvider(parsed.provider === "worker" ? "worker" : "gemini");
-      if (parsed.job && typeof parsed.job.id === "string") setJob(parsed.job);
-    } catch {
-      sessionStorage.removeItem(SESSION_KEY);
-    } finally {
-      setSessionReady(true);
-    }
-  }, []);
+  const preset = PROVIDER_PRESETS[provider];
+  const voice = EXPLAIN_VOICES[language];
 
-  useEffect(() => {
-    if (!sessionReady) return;
-    try {
-      sessionStorage.setItem(
-        SESSION_KEY,
-        JSON.stringify({ mode: workerMode, workerUrl, workerToken, provider: aiProvider, job }),
-      );
-    } catch {
-      /* private mode — the fields still work until refresh */
-    }
-  }, [sessionReady, workerMode, workerUrl, workerToken, aiProvider, job]);
-
-  useEffect(() => {
-    try {
-      setGeminiKey(localStorage.getItem(GEMINI_KEY_STORAGE) ?? "");
-      const bench = localStorage.getItem(BENCH_KEY);
-      if (bench) {
-        const parsed = JSON.parse(bench) as { colab?: unknown; kaggle?: unknown };
-        if (typeof parsed.colab === "string") setColabUrl(parsed.colab);
-        if (typeof parsed.kaggle === "string") setKaggleUrl(parsed.kaggle);
-      }
-    } catch {
-      /* private mode — the fields still work until refresh */
-    } finally {
-      setKeysReady(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!keysReady) return;
-    try {
-      const key = geminiKey.trim();
-      if (key) localStorage.setItem(GEMINI_KEY_STORAGE, key);
-      else localStorage.removeItem(GEMINI_KEY_STORAGE);
-      localStorage.setItem(BENCH_KEY, JSON.stringify({ colab: colabUrl.trim(), kaggle: kaggleUrl.trim() }));
-    } catch {
-      /* private mode */
-    }
-  }, [keysReady, geminiKey, colabUrl, kaggleUrl]);
-
-  function restoreSample() {
-    setProject(SAMPLE);
-    setDraft(SAMPLE_TEXT);
-    setError(null);
-    setNotice("Sample chapter restored, with the four painted panels.");
-    setTab("strip");
+  function session() {
+    return {
+      provider,
+      model: customModel.trim() || modelId,
+      apiKey: apiKey.trim(),
+      customBaseUrl: customBase.trim(),
+      workerUrl: workerUrl.trim(),
+      workerToken: workerToken.trim(),
+      localModel,
+      language,
+    };
   }
 
-  function onCut() {
-    setError(null);
-    const cleaned = sanitizeNovelText(draft);
-    if (cleaned !== draft) setDraft(cleaned);
-    const next = keepPrivacy(cutChapter(cleaned), project);
-    setProject(next);
-    setNotice(next.source === "sample" ? "Sample kept, paintings included." : "Cut on this phone. Soul and vessel are split from the names you wrote.");
-    setTab(next.source === "sample" ? "strip" : "forge");
+  function applyLanguage(next: "hi" | "en") {
+    setLanguage(next);
+    setProject((current) => ({ ...current, language: next, voice: EXPLAIN_VOICES[next] }));
+  }
+
+  function chooseProvider(next: CloudProvider) {
+    setProvider(next);
+    setModelId(defaultModel(next));
+    setCustomModel("");
+    setApiBadge(null);
+  }
+
+  function stamp(next: Project, hook?: string): Project {
+    return {
+      ...next,
+      source: "grok",
+      language,
+      voice,
+      hook: hook || next.hook || "",
+      aspect,
+      localModel,
+      text: draft,
+    };
+  }
+
+  async function directText(cleaned: string): Promise<boolean> {
+    const chunks = chunkChapterText(cleaned);
+    if (!chunks.length) {
+      setError("Paste at least a short chapter.");
+      return false;
+    }
+    const parts: Project[] = [];
+    const call = session();
+    for (let index = 0; index < chunks.length; index += 1) {
+      setBusy(chunks.length > 1 ? `Directing part ${index + 1} of ${chunks.length}` : "Directing the manhua explanation");
+      const result = await directChapter({ data: { text: chunks[index], ...call } });
+      if (!result.ok) {
+        setError(chunks.length > 1 ? `Part ${index + 1}: ${result.error}` : result.error);
+        return false;
+      }
+      parts.push({
+        ...result.direction,
+        source: "grok",
+        text: chunks[index],
+        hook: result.direction.hook,
+      });
+      if (result.via === "local") setNotice("Cloud missed. Shifted to the connected Colab/Kaggle model.");
+    }
+    const merged = keepPrivacy(mergeCuts(parts), project);
+    setProject(stamp(merged, parts.find((part) => part.hook)?.hook));
+    setDraft(cleaned);
+    setNotice(
+      chunks.length > 1
+        ? `Explanation written in ${chunks.length} parts. ${merged.scenes.length} panels, no four-panel cap.`
+        : `AI Manhua Recap Director wrote ${merged.scenes.length} panels in ${language === "hi" ? "Hindi" : "English"}.`,
+    );
+    setTab("forge");
+    return true;
   }
 
   async function onDirect() {
     const cleaned = sanitizeNovelText(draft);
     if (cleaned !== draft) setDraft(cleaned);
-    const chunks = chunkChapterText(cleaned);
-    if (!chunks.length) {
-      setError("Paste at least a short chapter.");
-      return;
-    }
     setError(null);
-    const parts: Project[] = [];
     try {
-      for (let index = 0; index < chunks.length; index += 1) {
-        setBusy(chunks.length > 1 ? `Directing part ${index + 1} of ${chunks.length}` : "Directing the chapter");
-        const result = await directChapter({
-          data: { text: chunks[index], provider: aiProvider, workerUrl, workerToken, geminiKey: geminiKey.trim() },
-        });
-        if (!result.ok) {
-          setError(chunks.length > 1 ? `Part ${index + 1}: ${result.error}` : result.error);
-          return;
-        }
-        parts.push({
-          ...result.direction,
-          source: "grok",
-          text: chunks[index],
-        });
-      }
-      const merged = keepPrivacy(mergeCuts(parts), project);
-      setProject({ ...merged, source: "grok", text: draft });
-      setNotice(
-        chunks.length > 1
-          ? `Directed in ${chunks.length} parts so the ending was not dropped. ${merged.scenes.length} scenes kept.`
-          : aiProvider === "worker"
-            ? "The worker directed this cut. Paintings were cleared so the new panels are not the sample."
-            : "Gemini directed this cut. Paintings were cleared so the new panels are not the sample.",
-      );
-      setTab("forge");
+      await directText(cleaned);
     } catch (err) {
       setError(err instanceof Error ? err.message : "The director did not answer.");
     } finally {
@@ -543,13 +361,18 @@ export function StudioApp() {
             text: sanitizeNovelText(result.text),
           });
         }
+        const combined = fetched.map((chapter) => `${chapter.title}\n\n${chapter.text}`).join("\n\n");
+        if (containsHan(combined)) {
+          setDraft(combined);
+          setNotice("Chinese text pulled. Translating into the explanation script.");
+          await directText(combined);
+          return;
+        }
         const next = keepPrivacy(projectFromChapters(fetched), project);
-        setProject(next);
+        setProject({ ...next, language, voice, aspect, localModel });
         setDraft(next.text);
-        setNotice(
-          `${fetched.length} chapters fetched on their own. ${next.scenes.length} scenes kept. Nothing was cut at 8,000 characters or 6 scenes.`,
-        );
-        setTab("forge");
+        setNotice(`${fetched.length} chapters fetched. Run the director to write the explanation.`);
+        setTab("story");
       } catch (err) {
         setError(err instanceof Error ? err.message : "The chapter range did not load.");
       } finally {
@@ -566,7 +389,12 @@ export function StudioApp() {
       }
       const text = sanitizeNovelText(result.title ? `${result.title}\n\n${result.text}` : result.text);
       setDraft(text);
-      setNotice("Page text is in the script. Site menus, chapter counters, and WTR-LAB chrome were dropped.");
+      if (containsHan(text)) {
+        setNotice("Chinese chapter pulled. Translating it into the explanation.");
+        await directText(text);
+        return;
+      }
+      setNotice("Page text is in the script. Direct it when you want the explanation.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "The page did not load.");
     } finally {
@@ -581,13 +409,12 @@ export function StudioApp() {
       return;
     }
     setError(null);
+    const call = session();
     for (let index = 0; index < targets.length; index += 1) {
       const scene = targets[index];
       setBusy(`Painting panel ${index + 1} of ${targets.length}`);
       try {
-        const result = await paintPanel({
-          data: { prompt: scene.imagePrompt, provider: aiProvider, workerUrl, workerToken, geminiKey: geminiKey.trim() },
-        });
+        const result = await paintPanel({ data: { prompt: scene.imagePrompt, ...call } });
         if (!result.ok) {
           setError(result.error);
           break;
@@ -598,7 +425,7 @@ export function StudioApp() {
           chapters: current.chapters?.map((chapter) => ({
             ...chapter,
             scenes: chapter.scenes.map((item) =>
-              `c${chapter.index}-${item.id}` === scene.id ? { ...item, imageUrl: result.url } : item,
+              `c${chapter.index}-${item.id}` === scene.id || item.id === scene.id ? { ...item, imageUrl: result.url } : item,
             ),
           })),
         }));
@@ -644,17 +471,14 @@ export function StudioApp() {
     }
     setBusy("Reading the chapter");
     try {
-      const result = await speakLine({
-        data: { text, voice: project.voice, provider: aiProvider, workerUrl, workerToken, geminiKey: geminiKey.trim() },
-      });
+      const result = await speakLine({ data: { text, voice, ...session() } });
       if (result.ok) {
         synth?.cancel();
-        const mime = result.mimeType || "audio/mpeg";
-        const src = `data:${mime};base64,${result.audioBase64}`;
+        const src = `data:${result.mimeType || "audio/mpeg"};base64,${result.audioBase64}`;
         setTrack(src);
         try {
           await new Audio(src).play();
-          setNotice(aiProvider === "worker" ? "Played the worker voice." : "Played the Gemini voice.");
+          setNotice(`Played ${voice}.`);
         } catch {
           setNotice("The voice track is ready. Tap Read again to play it.");
         }
@@ -669,7 +493,7 @@ export function StudioApp() {
         await speakOnDevice(text, chooseVoice(voices, text));
         setNotice("Reading on this phone.");
       } catch {
-        setError("Voice did not start. Tap Read again — this phone only allows speech from that tap.");
+        setError("Voice did not start. Tap Read again.");
       }
     } catch (err) {
       if (speech.state !== "failed") {
@@ -682,35 +506,43 @@ export function StudioApp() {
     }
   }
 
-  async function onDownload() {
-    setBusy("Composing the strip");
-    setError(null);
-    try {
-      const blob = await renderStripPng(project);
-      downloadBlob(blob, `${project.title.replace(/[^\w]+/g, "-").toLowerCase() || "aether"}-strip.png`);
-      setNotice("Strip saved. Bubbles and hits are drawn on the picture, not inside the painting.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save the strip.");
-    } finally {
-      setBusy(null);
-    }
-  }
-
   async function onCopy(value: string, label: string) {
     const ok = await copyText(value);
     setNotice(ok ? `${label} copied.` : `Could not copy ${label.toLowerCase()} on this phone.`);
   }
 
-  async function onTestConnection() {
+  async function onVerifyApi() {
+    setBusy("Verifying the API");
+    setError(null);
+    setApiBadge(null);
+    try {
+      const result = await verifyCloud({ data: session() });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setApiBadge(result.badge);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The API check failed.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onTestConnection(target?: string) {
+    const href = (target || workerUrl).trim();
     setBusy("Testing the worker");
     setError(null);
+    setWorkerBadge(null);
     try {
-      const result = await testWorker({ data: { url: workerUrl, token: workerToken } });
+      const result = await testWorker({ data: { url: href, token: workerToken } });
       if (!result.ok) {
         setError(result.body ? `${result.error} ${result.body}` : result.error);
         return;
       }
-      setNotice(`Worker answered ${result.status}. ${result.body || "Health is clear."}`);
+      if (target && target !== workerUrl) setWorkerUrl(target);
+      setWorkerBadge("Connection Done — Local AI & GPU Worker Active");
+      setNotice("Worker health answered.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "The worker did not answer.");
     } finally {
@@ -718,22 +550,28 @@ export function StudioApp() {
     }
   }
 
+  function packetNow() {
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    return jobPacket(projectWithAbsoluteArt({ ...project, language, voice, aspect, localModel, hook: project.hook }, origin));
+  }
+
   async function onSendJob() {
-    setBusy("Sending the job packet");
+    setBusy("Rendering the explanation video");
     setError(null);
+    setWatchUrl(null);
     try {
-      const result = await submitJob({ data: { url: workerUrl, token: workerToken, packet: jobPacket(project) } });
+      const result = await submitJob({ data: { url: workerUrl, token: workerToken, packet: packetNow() } });
       if (!result.ok) {
         setError(result.error);
         return;
       }
       if (result.jobId) {
         setJob({ id: result.jobId, status: "queued", progress: 0, label: "Accepted", error: "", mp4Url: null });
-        setNotice(`Worker accepted the packet. Watching job ${result.jobId}.`);
+        setNotice(`Worker accepted the film. Watching job ${result.jobId}.`);
         setTab("bay");
       } else {
         setJob(null);
-        setNotice(`Worker accepted the packet (${result.status}), but the reply had no job id to watch.`);
+        setNotice("Worker accepted the packet, but the reply had no job id.");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "The worker did not take the job.");
@@ -774,21 +612,9 @@ export function StudioApp() {
     };
   }, [job?.id, jobTerminal, workerUrl, workerToken]);
 
-  function onDownloadJob() {
-    setError(null);
-    try {
-      const packet = jobPacket(project);
-      const blob = new Blob([JSON.stringify(packet, null, 2)], { type: "application/json" });
-      downloadBlob(blob, "job.json");
-      setNotice("job.json saved. It follows job packet v2.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not export job.json.");
-    }
-  }
-
   async function onDownloadMp4() {
     if (!job) return;
-    setBusy("Fetching the MP4");
+    setBusy("Fetching the full MP4");
     setError(null);
     try {
       const res = await fetch("/api/studio/mp4", {
@@ -804,9 +630,128 @@ export function StudioApp() {
       const blob = await res.blob();
       const slug = project.title.replace(/[^\w]+/g, "-").toLowerCase() || "aether";
       downloadBlob(blob, `${slug}.mp4`);
-      setNotice("MP4 saved from the worker.");
+      setNotice("Full MP4 saved. The YouTube upload does not need this file.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "The MP4 did not download.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onPreview() {
+    setBusy("Loading the 6 second preview");
+    setError(null);
+    try {
+      const res = await fetch("/api/studio/mp4", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "preview", url: workerUrl, token: workerToken, jobId: job?.id }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        setError(data?.error || "The preview did not load.");
+        return;
+      }
+      const blob = await res.blob();
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(URL.createObjectURL(blob));
+      setNotice("Six second preview is in the player. The full file stayed on the worker.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The preview did not load.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onConnectYoutube() {
+    const clientId = ytClientId.trim();
+    if (!clientId) {
+      setError("Paste the Google OAuth client id first. It stays in this tab only.");
+      return;
+    }
+    setError(null);
+    setBusy("Opening Google");
+    try {
+      await loadGis();
+      const google = googleAccounts();
+      if (!google) throw new Error("Google sign-in did not load.");
+      const client = google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly openid email",
+        callback: (resp) => {
+          if (!resp.access_token) {
+            setError(resp.error || "Google did not return a token.");
+            setBusy(null);
+            return;
+          }
+          setYtToken(resp.access_token);
+          void (async () => {
+            try {
+              const [channelRes, userRes] = await Promise.all([
+                fetch("https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true", {
+                  headers: { Authorization: `Bearer ${resp.access_token}` },
+                }),
+                fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+                  headers: { Authorization: `Bearer ${resp.access_token}` },
+                }),
+              ]);
+              const channelJson = (await channelRes.json()) as { items?: { snippet?: { title?: string } }[] };
+              const userJson = (await userRes.json()) as { email?: string };
+              setYtChannel(channelJson.items?.[0]?.snippet?.title || "");
+              setYtEmail(userJson.email || "");
+              setNotice("YouTube channel connected for this tab only.");
+            } catch {
+              setNotice("Token received. Channel details did not load.");
+            } finally {
+              setBusy(null);
+            }
+          })();
+        },
+      });
+      client.requestAccessToken({ prompt: "select_account" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Google did not open.");
+      setBusy(null);
+    }
+  }
+
+  async function onUpload() {
+    if (!job || (job.status !== "done" && !job.mp4Url)) {
+      setError("Render the video and watch the 6 second preview before uploading.");
+      return;
+    }
+    if (!previewUrl) {
+      setError("Play the 6 second preview first. The full film stays on the worker until you approve it.");
+      return;
+    }
+    if (!ytToken) {
+      setError("Connect a YouTube channel first.");
+      return;
+    }
+    setBusy("Uploading from the worker");
+    setError(null);
+    const tags = parseTags(tagDraft);
+    try {
+      const result = await uploadYoutube({
+        data: {
+          url: workerUrl,
+          token: workerToken,
+          jobId: job.id,
+          accessToken: ytToken,
+          title: project.seo.title,
+          description: project.seo.description,
+          tags,
+          privacy: youtubePrivacy(project.seo.privacy),
+        },
+      });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setWatchUrl(result.watchUrl);
+      setNotice("Uploaded. The watch link is below.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The upload did not finish.");
     } finally {
       setBusy(null);
     }
@@ -815,10 +760,17 @@ export function StudioApp() {
   const tabs: { id: Tab; label: string; icon: typeof ScrollText }[] = [
     { id: "story", label: "Script", icon: ScrollText },
     { id: "forge", label: "Cast", icon: Sparkles },
-    { id: "strip", label: "Strip", icon: Clapperboard },
+    { id: "strip", label: "Film", icon: Clapperboard },
     { id: "bay", label: "Bay", icon: Factory },
     { id: "youtube", label: "YouTube", icon: Youtube },
   ];
+
+  const tagsKey = project.seo.tags.join("|");
+  useEffect(() => {
+    if (seenTags.current === tagsKey) return;
+    seenTags.current = tagsKey;
+    setTagDraft(project.seo.tags.join(", "));
+  }, [tagsKey]);
 
   return (
     <main className="mx-auto min-h-dvh max-w-lg">
@@ -856,136 +808,147 @@ export function StudioApp() {
       {notice && !error ? <p className="mx-4 mt-3 text-sm text-muted">{notice}</p> : null}
 
       <div className="screen-pad px-4 pt-4">
-        {!showSettings ? <InstallHint /> : null}
         {showSettings ? (
           <section className="space-y-4">
             <div>
               <h2 className="text-3xl text-paper">Settings</h2>
               <p className="mt-2 text-sm text-muted">
-                The worker address and token stay in this browser tab. They are not saved with the chapter.
+                Keys, tokens, notebook links, and the YouTube token live in this tab’s memory only. Refresh clears them. Nothing is written to storage.
               </p>
             </div>
-            <div className="grid grid-cols-2 gap-2" role="group" aria-label="Studio mode">
-              <button
-                type="button"
-                aria-pressed={workerMode === "live"}
-                onClick={() => setWorkerMode("live")}
-                className={`min-h-12 rounded-2xl px-3 text-sm font-semibold ${workerMode === "live" ? "bg-seal text-paper" : "bg-panel text-paper"}`}
-              >
-                Live worker
-              </button>
-              <button
-                type="button"
-                aria-pressed={workerMode === "packet"}
-                onClick={() => setWorkerMode("packet")}
-                className={`min-h-12 rounded-2xl px-3 text-sm font-semibold ${workerMode === "packet" ? "bg-seal text-paper" : "bg-panel text-paper"}`}
-              >
-                Job packet
-              </button>
-            </div>
-            <label className="block" htmlFor="worker-url">
-              <span className="text-sm font-medium text-paper">Worker URL</span>
-              <input
-                id="worker-url"
-                value={workerUrl}
-                onChange={(event) => setWorkerUrl(event.target.value)}
-                placeholder="https://worker.example.com"
-                inputMode="url"
-                autoComplete="off"
-                className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted"
-              />
+            <label className="block" htmlFor="ai-provider">
+              <span className="text-sm font-medium text-paper">AI provider</span>
+              <select id="ai-provider" value={provider} onChange={(event) => chooseProvider(event.target.value as CloudProvider)} className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base">
+                {PROVIDER_IDS.map((id) => (
+                  <option key={id} value={id}>
+                    {PROVIDER_PRESETS[id].label}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-1 block text-xs text-muted">{preset.hint}</span>
             </label>
-            <label className="block" htmlFor="worker-token">
-              <span className="text-sm font-medium text-paper">Token</span>
+            {preset.models.length ? (
+              <label className="block" htmlFor="ai-model">
+                <span className="text-sm font-medium text-paper">Model</span>
+                <select id="ai-model" value={modelId} onChange={(event) => { setModelId(event.target.value); setApiBadge(null); }} className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base">
+                  {preset.models.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            <label className="block" htmlFor="custom-model">
+              <span className="text-sm font-medium text-paper">Model ID</span>
               <input
-                id="worker-token"
-                type="password"
-                value={workerToken}
-                onChange={(event) => setWorkerToken(event.target.value)}
+                id="custom-model"
+                value={customModel}
+                onChange={(event) => {
+                  setCustomModel(event.target.value);
+                  setApiBadge(null);
+                }}
+                placeholder={modelId || "glm-5.2"}
                 autoComplete="off"
-                className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted"
+                spellCheck={false}
+                className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none"
               />
+              <span className="mt-1 block text-xs text-muted">Any id overrides the list. Leave this empty to use the selected model.</span>
             </label>
-            <button
-              type="button"
-              onClick={onTestConnection}
-              disabled={!!busy || !workerUrl.trim()}
-              className="min-h-12 w-full rounded-2xl bg-seal text-sm font-semibold text-paper disabled:opacity-50"
-            >
-              Test connection
-            </button>
-            <p className="text-xs text-muted">
-              Test calls GET /api/v1/health with the header X-Aether-Token. Private addresses stay blocked.{" "}
-              {workerMode === "live" ? "Bay can send the packet to this worker." : "Bay keeps the packet on this phone for Kaggle or Colab."}
-            </p>
-            <div>
-              <h3 className="text-lg text-paper">Director</h3>
-              <div className="mt-2 grid grid-cols-2 gap-2" role="group" aria-label="AI provider">
-                <button
-                  type="button"
-                  aria-pressed={aiProvider === "gemini"}
-                  onClick={() => setAiProvider("gemini")}
-                  className={`min-h-12 rounded-2xl px-3 text-sm font-semibold ${aiProvider === "gemini" ? "bg-seal text-paper" : "bg-panel text-paper"}`}
-                >
-                  Gemini
+            {provider === "custom" ? (
+              <label className="block" htmlFor="custom-base">
+                <span className="text-sm font-medium text-paper">OpenAI-compatible base URL</span>
+                <input id="custom-base" value={customBase} onChange={(event) => setCustomBase(event.target.value)} placeholder="https://host/v1" inputMode="url" autoComplete="off" className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none" />
+              </label>
+            ) : null}
+            <label className="block" htmlFor="api-key">
+              <span className="flex items-center justify-between gap-3 text-sm font-medium text-paper">
+                API key {provider === "github" ? "(GitHub PAT)" : ""}
+                <button type="button" onClick={() => setRevealKey((open) => !open)} className="text-xs font-semibold text-cinnabar">
+                  {revealKey ? "Hide" : "Show"}
                 </button>
-                <button
-                  type="button"
-                  aria-pressed={aiProvider === "worker"}
-                  onClick={() => setAiProvider("worker")}
-                  className={`min-h-12 rounded-2xl px-3 text-sm font-semibold leading-tight ${aiProvider === "worker" ? "bg-seal text-paper" : "bg-panel text-paper"}`}
-                >
-                  Open-source worker
+              </span>
+              <input
+                id="api-key"
+                type={revealKey ? "text" : "password"}
+                value={apiKey}
+                onChange={(event) => { setApiKey(event.target.value); setApiBadge(null); }}
+                placeholder={provider === "github" ? "ghp_… or github_pat_…" : "Paste a key. It is not saved."}
+                autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none"
+              />
+            </label>
+            <button type="button" onClick={onVerifyApi} disabled={!!busy || !apiKey.trim()} className="min-h-12 w-full rounded-2xl bg-seal text-sm font-semibold text-paper disabled:opacity-50">
+              Verify & Connect API
+            </button>
+            {apiBadge ? <p className="badge-ok rounded-xl px-3 py-2 text-sm font-semibold">{apiBadge}</p> : null}
+            <label className="block" htmlFor="local-mode">
+              <span className="text-sm font-medium text-paper">Local model if the cloud key is missing or limited</span>
+              <select id="local-mode" value={localModel} onChange={(event) => setLocalModel(event.target.value as LocalMode)} className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base">
+                {LOCAL_MODES.map((mode) => (
+                  <option key={mode.id} value={mode.id}>
+                    {mode.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <fieldset>
+              <legend className="text-sm font-medium text-paper">Explanation & voiceover language</legend>
+              <div className="mt-2 grid grid-cols-1 gap-2">
+                <button type="button" aria-pressed={language === "hi"} onClick={() => applyLanguage("hi")} className={`min-h-12 rounded-xl px-3 text-left text-sm font-semibold ${language === "hi" ? "bg-seal text-paper" : "bg-panel text-paper"}`}>
+                  Hindi (Desi manhua explanation) · hi-IN-MadhurNeural
+                </button>
+                <button type="button" aria-pressed={language === "en"} onClick={() => applyLanguage("en")} className={`min-h-12 rounded-xl px-3 text-left text-sm font-semibold ${language === "en" ? "bg-seal text-paper" : "bg-panel text-paper"}`}>
+                  English (dramatic recap) · en-US-ChristopherNeural
                 </button>
               </div>
-              <label className="mt-3 block" htmlFor="gemini-key">
-                <span className="flex items-center justify-between gap-3 text-sm font-medium text-paper">
-                  Gemini API key
-                  <button
-                    type="button"
-                    onClick={() => setRevealKey((open) => !open)}
-                    className="text-xs font-semibold text-cinnabar"
-                  >
-                    {revealKey ? "Hide" : "Show"}
-                  </button>
-                </span>
-                <input
-                  id="gemini-key"
-                  type={revealKey ? "text" : "password"}
-                  value={geminiKey}
-                  onChange={(event) => setGeminiKey(event.target.value)}
-                  placeholder="Paste a key from Google AI Studio"
-                  autoComplete="off"
-                  autoCapitalize="off"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  inputMode="text"
-                  className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none"
-                />
-              </label>
-              <p className="mt-2 text-xs text-muted">
-                {geminiKey.trim()
-                  ? "Saved in this browser only. Direct, paint, and Gemini voice use this key. No model picker and no server key."
-                  : "Paste a key here. It stays in this browser. You do not pick a model, and a server environment key is not required."}
-              </p>
-              {geminiKey.trim() ? (
-                <button type="button" onClick={() => setGeminiKey("")} className="mt-2 min-h-11 text-sm font-semibold text-cinnabar">
-                  Clear saved key
-                </button>
-              ) : null}
-            </div>
-            <BenchLinks colabUrl={colabUrl} kaggleUrl={kaggleUrl} onColab={setColabUrl} onKaggle={setKaggleUrl} />
+            </fieldset>
+            <label className="block" htmlFor="worker-url">
+              <span className="text-sm font-medium text-paper">Live worker URL</span>
+              <input id="worker-url" value={workerUrl} onChange={(event) => { setWorkerUrl(event.target.value); setWorkerBadge(null); }} placeholder="https://….trycloudflare.com" inputMode="url" autoComplete="off" className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted" />
+            </label>
+            <label className="block" htmlFor="worker-token">
+              <span className="text-sm font-medium text-paper">Worker token</span>
+              <input id="worker-token" type="password" value={workerToken} onChange={(event) => setWorkerToken(event.target.value)} autoComplete="off" className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none" />
+            </label>
+            <button type="button" onClick={() => onTestConnection()} disabled={!!busy || !workerUrl.trim()} className="min-h-12 w-full rounded-2xl bg-seal text-sm font-semibold text-paper disabled:opacity-50">
+              Test & Connect
+            </button>
+            {workerBadge ? <p className="badge-ok rounded-xl px-3 py-2 text-sm font-semibold">{workerBadge}</p> : null}
+            <BenchLinks
+              colabUrl={colabUrl}
+              kaggleUrl={kaggleUrl}
+              onColab={setColabUrl}
+              onKaggle={setKaggleUrl}
+              onTest={(value) => onTestConnection(/trycloudflare\.com|ngrok/i.test(value) ? value : workerUrl)}
+              busy={!!busy}
+              badge={workerBadge}
+            />
           </section>
         ) : null}
 
         {!showSettings && tab === "story" ? (
           <section className="space-y-4">
             <div>
-              <h2 className="text-3xl text-paper">Cut the chapter</h2>
+              <h2 className="text-3xl text-paper">Explain the chapter</h2>
               <p className="mt-2 text-sm text-muted">
-                Paste a chapter or pull a public page. Site menus and counters are stripped before the cut, the dialogue, and the YouTube card.
+                Chinese from WTR-LAB is translated by the active model into a Hindi or English manhua explanation. Nothing is stored on this phone.
               </p>
             </div>
+            <fieldset>
+              <legend className="text-sm font-medium text-paper">Explanation & voiceover language</legend>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <button type="button" aria-pressed={language === "hi"} onClick={() => applyLanguage("hi")} className={`min-h-12 rounded-xl px-2 text-sm font-semibold ${language === "hi" ? "bg-seal text-paper" : "bg-panel text-paper"}`}>
+                  Hindi
+                </button>
+                <button type="button" aria-pressed={language === "en"} onClick={() => applyLanguage("en")} className={`min-h-12 rounded-xl px-2 text-sm font-semibold ${language === "en" ? "bg-seal text-paper" : "bg-panel text-paper"}`}>
+                  English
+                </button>
+              </div>
+            </fieldset>
             <label className="block">
               <span className="text-sm font-medium text-paper">Chapter script</span>
               <textarea
@@ -1003,69 +966,30 @@ export function StudioApp() {
                 spellCheck
               />
             </label>
-            <div className="grid grid-cols-2 gap-2">
-              <button type="button" onClick={onCut} disabled={!!busy} className="min-h-12 rounded-2xl bg-seal px-3 text-sm font-semibold text-paper disabled:opacity-50">
-                Cut on this phone
-              </button>
-              <button type="button" onClick={onDirect} disabled={!!busy} className="min-h-12 rounded-2xl bg-panel px-3 text-sm font-semibold text-paper disabled:opacity-50">
-                Direct this chapter
-              </button>
-              <button type="button" onClick={restoreSample} className="min-h-12 rounded-2xl bg-panel px-3 text-sm text-paper">
-                Restore sample
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setDraft("");
-                  setNotice("Script cleared.");
-                }}
-                className="min-h-12 rounded-2xl bg-panel px-3 text-sm text-paper"
-              >
-                Clear script
-              </button>
-            </div>
+            <button type="button" onClick={onDirect} disabled={!!busy} className="min-h-14 w-full rounded-2xl bg-seal px-3 text-sm font-semibold text-paper disabled:opacity-50">
+              AI Manhua Recap Director (GLM-5.2)
+            </button>
+            <button type="button" onClick={() => { setProject(SAMPLE); setDraft(SAMPLE_TEXT); setNotice("Sample restored."); }} className="min-h-11 w-full text-sm font-semibold text-cinnabar">
+              Restore sample
+            </button>
             <div className="rounded-2xl bg-ink-2 p-4">
               <label className="block text-sm font-medium text-paper" htmlFor="source-url">
                 Chapter link
               </label>
-              <input
-                id="source-url"
-                value={url}
-                onChange={(event) => setUrl(event.target.value)}
-                placeholder="https://example.com/story/chapter-{n}"
-                inputMode="url"
-                className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted"
-              />
+              <input id="source-url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://wtr-lab.com/…/chapter-1" inputMode="url" className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted" />
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <label className="block text-sm text-paper" htmlFor="chapter-start">
                   Start
-                  <input
-                    id="chapter-start"
-                    value={rangeStart}
-                    onChange={(event) => setRangeStart(event.target.value)}
-                    inputMode="numeric"
-                    placeholder="1"
-                    className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted"
-                  />
+                  <input id="chapter-start" value={rangeStart} onChange={(event) => setRangeStart(event.target.value)} inputMode="numeric" placeholder="1" className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted" />
                 </label>
                 <label className="block text-sm text-paper" htmlFor="chapter-end">
                   End
-                  <input
-                    id="chapter-end"
-                    value={rangeEnd}
-                    onChange={(event) => setRangeEnd(event.target.value)}
-                    inputMode="numeric"
-                    placeholder="12"
-                    className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted"
-                  />
+                  <input id="chapter-end" value={rangeEnd} onChange={(event) => setRangeEnd(event.target.value)} inputMode="numeric" placeholder="12" className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted" />
                 </label>
               </div>
               <button type="button" onClick={onFetch} disabled={!!busy || !url.trim()} className="mt-3 min-h-12 w-full rounded-xl bg-panel text-sm font-semibold text-paper disabled:opacity-50">
                 {rangeStart.trim() || rangeEnd.trim() ? "Pull chapter range" : "Pull readable text"}
               </button>
-              <p className="mt-2 text-xs text-muted">
-                Leave start and end empty for one page. For a range, put {"{n}"} in the link, or paste one chapter URL and the last number is replaced. The range you type is what gets pulled. Private addresses stay blocked.
-              </p>
             </div>
           </section>
         ) : null}
@@ -1074,7 +998,7 @@ export function StudioApp() {
           <section className="space-y-5">
             <div>
               <h2 className="text-3xl text-paper">Soul and vessel</h2>
-              <p className="mt-2 text-sm text-muted">{project.logline}</p>
+              <p className="mt-2 text-sm text-muted">{project.hook || project.logline}</p>
             </div>
             <ul className="flex gap-3 overflow-x-auto pb-1">
               {project.characters.length === 0 ? <li className="text-sm text-muted">No named cast in this cut.</li> : null}
@@ -1088,41 +1012,35 @@ export function StudioApp() {
                 </li>
               ))}
             </ul>
-            <div>
-              <h3 className="text-lg text-paper">State timeline</h3>
-              <ul className="mt-2 space-y-2">
-                {project.timeline.map((note) => (
-                  <li key={note} className="rounded-xl bg-panel px-3 py-2 text-sm text-paper">
-                    {note}
-                  </li>
-                ))}
-              </ul>
-            </div>
             <button type="button" onClick={onPaint} disabled={!!busy} className="min-h-12 w-full rounded-2xl bg-seal text-sm font-semibold text-paper disabled:opacity-50">
               Paint unpainted panels
             </button>
-            <p className="text-xs text-muted">Every unpainted panel in this chapter is painted, one after another, only when you ask. Text hits and bubbles are drawn afterward, never inside the painting.</p>
+            <p className="text-xs text-muted">Unlimited panels. Gemini paints when that key is verified. Otherwise the connected worker draws the frame the video will move.</p>
           </section>
         ) : null}
 
         {!showSettings && tab === "strip" ? (
           <section className="space-y-4">
             <div className="flex items-end justify-between gap-3">
-              <h2 className="text-3xl text-paper">The strip</h2>
-              <button type="button" onClick={() => setWide((value) => !value)} className="min-h-11 rounded-full bg-panel px-4 text-sm text-paper">
-                {wide ? "Vertical" : "16:9 wings"}
-              </button>
+              <h2 className="text-3xl text-paper">Explanation film</h2>
             </div>
-            <div className="space-y-4">
-              {project.scenes.map((scene) => (
-                <div key={scene.id} className="relative">
-                  <PanelArt scene={scene} wide={wide} />
-                </div>
+            <div className="grid grid-cols-2 gap-2" role="group" aria-label="Aspect ratio">
+              {(["16:9", "9:16"] as const).map((option) => (
+                <button key={option} type="button" aria-pressed={aspect === option} onClick={() => setAspect(option)} className={`min-h-12 rounded-xl text-sm font-semibold ${aspect === option ? "bg-seal text-paper" : "bg-panel text-paper"}`}>
+                  {option === "16:9" ? "16:9 YouTube" : "9:16 Shorts"}
+                </button>
               ))}
             </div>
-            <button type="button" onClick={onDownload} disabled={!!busy} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-seal text-sm font-semibold text-paper disabled:opacity-50">
-              <Download className="size-4" aria-hidden />
-              Save strip
+            <p className="text-sm text-muted">
+              {project.scenes.length} panels. The worker renders Ken Burns, glowing phrase subtitles, {voice}, and ducked music. This phone does not stack a PNG strip.
+            </p>
+            <div className="space-y-4">
+              {project.scenes.map((scene) => (
+                <PanelArt key={scene.id} scene={scene} wide={aspect === "16:9"} />
+              ))}
+            </div>
+            <button type="button" onClick={onSendJob} disabled={!!busy || !workerUrl.trim()} className="min-h-12 w-full rounded-2xl bg-seal text-sm font-semibold text-paper disabled:opacity-50">
+              Render explanation video
             </button>
           </section>
         ) : null}
@@ -1132,42 +1050,24 @@ export function StudioApp() {
             <div>
               <h2 className="text-3xl text-paper">Factory bay</h2>
               <p className="mt-2 text-sm text-muted">
-                {workerMode === "live"
-                  ? "Live worker is on. Send the job packet from here. The token never leaves this tab except on that request."
-                  : "Kaggle is the GPU bench: a free T4 session lasts longer than Colab and will not drop mid-chapter. Colab is only the backup when you want the file in Google Drive. Neither one can be a live door from this phone, so you hand over a job packet."}
+                Paste the cell on a Colab T4 or a Kaggle T4x2. Notebook links and the worker test live in Settings, in this tab’s memory only.
               </p>
             </div>
-            <BenchLinks colabUrl={colabUrl} kaggleUrl={kaggleUrl} onColab={setColabUrl} onKaggle={setKaggleUrl} />
             <div className="rounded-2xl bg-ink-2 p-4">
               <div className="flex items-center gap-2">
                 <Mic className="size-4 text-cinnabar" aria-hidden />
-                <h3 className="text-lg text-paper">Male voice lock</h3>
+                <h3 className="text-lg text-paper">Narration · {voice}</h3>
               </div>
               <p className="mt-2 text-sm text-paper">{project.narration}</p>
               <button type="button" onClick={onSpeak} disabled={!!busy} className="mt-3 min-h-12 w-full rounded-xl bg-seal text-sm font-semibold text-paper disabled:opacity-50">
-                Read it, male voice only
+                Read it
               </button>
-              <p className="mt-2 text-xs text-muted">Gemini voice if a key is saved. Otherwise this phone reads it. Android waits for its voice list before speaking, and a missing male label no longer stops the read.</p>
             </div>
+            <button type="button" onClick={onSendJob} disabled={!!busy || !workerUrl.trim()} className="min-h-12 w-full rounded-2xl bg-seal text-sm font-semibold text-paper disabled:opacity-50">
+              Send film to worker
+            </button>
             <div className="rounded-2xl bg-ink-2 p-4">
-              <h3 className="text-lg text-paper">Job packet</h3>
-              <p className="mt-2 text-xs text-muted">
-                Title, description, tags, and privacy live on the YouTube tab. This file does not include that privacy choice, and it does not include the worker token. Nothing here signs into YouTube.
-              </p>
-              <button type="button" className="mt-3 min-h-11 w-full rounded-xl bg-panel text-sm text-paper" onClick={() => onCopy(JSON.stringify(jobPacket(project), null, 2), "Job packet")}>
-                Copy job packet
-              </button>
-              <button type="button" onClick={onDownloadJob} disabled={!!busy} className="mt-2 min-h-12 w-full rounded-xl bg-panel text-sm font-semibold text-paper disabled:opacity-50">
-                Download job.json
-              </button>
-              {workerMode === "live" ? (
-                <button type="button" onClick={onSendJob} disabled={!!busy} className="mt-2 min-h-12 w-full rounded-xl bg-seal text-sm font-semibold text-paper disabled:opacity-50">
-                  Send to worker
-                </button>
-              ) : null}
-            </div>
-            <div className="rounded-2xl bg-ink-2 p-4">
-              <h3 className="text-lg text-paper">Job status</h3>
+              <h3 className="text-lg text-paper">Render status</h3>
               {job ? (
                 <div className="mt-3" aria-live="polite">
                   <p className="text-sm text-paper">
@@ -1177,36 +1077,15 @@ export function StudioApp() {
                   <div className="mt-2 h-2 overflow-hidden rounded-full bg-line">
                     <div className="h-full bg-cinnabar" style={{ width: `${job.progress}%` }} />
                   </div>
-                  <p className="mt-2 text-xs text-muted">{job.progress}% from the worker. This is not a guess.</p>
                   {job.error ? <p className="mt-2 text-sm text-paper">{job.error}</p> : null}
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    <button type="button" onClick={onSendJob} disabled={!!busy || workerMode !== "live"} className="min-h-12 rounded-xl bg-panel text-sm font-semibold text-paper disabled:opacity-50">
-                      Retry
-                    </button>
-                    <button
-                      type="button"
-                      onClick={onDownloadMp4}
-                      disabled={!!busy || (job.status !== "done" && !job.mp4Url)}
-                      className="min-h-12 rounded-xl bg-seal text-sm font-semibold text-paper disabled:opacity-50"
-                    >
-                      Download MP4
-                    </button>
-                  </div>
+                  <button type="button" onClick={onSendJob} disabled={!!busy} className="mt-3 min-h-12 w-full rounded-xl bg-panel text-sm font-semibold text-paper disabled:opacity-50">
+                    Render again
+                  </button>
                 </div>
               ) : (
-                <p className="mt-2 text-sm text-muted">
-                  {workerMode === "live"
-                    ? "Send the packet. This screen then polls the worker and shows its progress, errors, and the MP4 when the job is done."
-                    : "Switch to Live worker and send a packet to watch a job. Job packet mode only downloads job.json."}
-                </p>
+                <p className="mt-2 text-sm text-muted">No job yet. Connect the worker, then render.</p>
               )}
             </div>
-            <ol className="space-y-2 text-sm text-paper">
-              <li className="rounded-xl bg-panel px-3 py-2">1. Cut the chapter in Script.</li>
-              <li className="rounded-xl bg-panel px-3 py-2">2. Copy the job packet.</li>
-              <li className="rounded-xl bg-panel px-3 py-2">3. Kaggle, new notebook, GPU T4, upload job.json. Colab works with the same cell if you prefer Drive.</li>
-              <li className="rounded-xl bg-panel px-3 py-2">4. Paste the factory cell. It draws bubbles, locks a male voice, trims edge silence, and writes an MP4.</li>
-            </ol>
             <button type="button" onClick={() => setShowCell((value) => !value)} className="min-h-11 text-sm font-semibold text-cinnabar">
               {showCell ? "Hide factory cell" : "Show factory cell"}
             </button>
@@ -1222,13 +1101,70 @@ export function StudioApp() {
         ) : null}
 
         {!showSettings && tab === "youtube" ? (
-          <YoutubePreview
-            project={project}
-            onChange={(seo) => setProject((current) => ({ ...current, seo: { ...current.seo, ...seo } }))}
-            onCopyCard={(text) => {
-              void onCopy(text, "YouTube card");
-            }}
-          />
+          <section className="space-y-4" aria-labelledby="youtube-heading">
+            <div>
+              <h2 id="youtube-heading" className="text-3xl text-paper">
+                YouTube
+              </h2>
+              <p className="mt-2 text-sm text-muted">Watch six seconds, then the worker uploads the full film. The Google token is not saved.</p>
+            </div>
+            <div className="overflow-hidden rounded-2xl bg-ink">
+              {previewUrl ? (
+                <video src={previewUrl} controls playsInline className="aspect-video w-full bg-ink" />
+              ) : (
+                <div className="flex aspect-video items-end justify-center pb-4">
+                  <p className="text-xs font-semibold tracking-widest text-muted uppercase">No preview yet</p>
+                </div>
+              )}
+            </div>
+            <button type="button" onClick={onPreview} disabled={!!busy || !workerUrl.trim() || !job || (job.status !== "done" && !job.mp4Url)} className="min-h-12 w-full rounded-2xl bg-panel text-sm font-semibold text-paper disabled:opacity-50">
+              Play 6-second preview
+            </button>
+            <label className="block" htmlFor="yt-client">
+              <span className="text-sm font-medium text-paper">Google OAuth client id</span>
+              <input id="yt-client" value={ytClientId} onChange={(event) => setYtClientId(event.target.value)} autoComplete="off" spellCheck={false} placeholder="….apps.googleusercontent.com" className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none" />
+            </label>
+            <button type="button" onClick={onConnectYoutube} disabled={!!busy} className="min-h-12 w-full rounded-2xl bg-seal text-sm font-semibold text-paper disabled:opacity-50">
+              Select Google Account / Connect YouTube Channel
+            </button>
+            {ytToken ? (
+              <p className="badge-ok rounded-xl px-3 py-2 text-sm font-semibold">
+                {ytEmail || "Account connected"}
+                {ytChannel ? ` · ${ytChannel}` : ""}
+              </p>
+            ) : null}
+            <label className="block" htmlFor="yt-title">
+              <span className="text-sm font-medium text-paper">Title</span>
+              <input id="yt-title" value={project.seo.title} maxLength={100} onChange={(event) => setProject((current) => ({ ...current, seo: { ...current.seo, title: event.target.value } }))} className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none" />
+            </label>
+            <label className="block" htmlFor="yt-description">
+              <span className="text-sm font-medium text-paper">Description</span>
+              <textarea id="yt-description" value={project.seo.description} maxLength={5000} onChange={(event) => setProject((current) => ({ ...current, seo: { ...current.seo, description: event.target.value } }))} className="field mt-2 min-h-32 w-full rounded-xl px-3 py-3 text-base outline-none" />
+            </label>
+            <label className="block" htmlFor="yt-tags">
+              <span className="text-sm font-medium text-paper">Tags</span>
+              <input id="yt-tags" value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} onBlur={() => setProject((current) => ({ ...current, seo: { ...current.seo, tags: parseTags(tagDraft) } }))} className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none" />
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {(["public", "unlisted", "private"] as const).map((option) => (
+                <button key={option} type="button" aria-pressed={youtubePrivacy(project.seo.privacy) === option} onClick={() => setProject((current) => ({ ...current, seo: { ...current.seo, privacy: option } }))} className={`min-h-11 rounded-xl px-2 text-sm font-semibold capitalize ${youtubePrivacy(project.seo.privacy) === option ? "bg-seal text-paper" : "bg-panel text-paper"}`}>
+                  {option}
+                </button>
+              ))}
+            </div>
+            <button type="button" onClick={onUpload} disabled={!!busy || !ytToken || !previewUrl} className="min-h-12 w-full rounded-2xl bg-seal text-sm font-semibold text-paper disabled:opacity-50">
+              OK — Upload Directly to YouTube
+            </button>
+            {watchUrl ? (
+              <a href={watchUrl} target="_blank" rel="noreferrer" className="block text-sm font-semibold text-cinnabar">
+                {watchUrl}
+              </a>
+            ) : null}
+            <button type="button" onClick={onDownloadMp4} disabled={!!busy || !job || (job.status !== "done" && !job.mp4Url)} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-panel text-sm font-semibold text-paper disabled:opacity-50">
+              <Download className="size-4" aria-hidden />
+              Download Full MP4 to Phone
+            </button>
+          </section>
         ) : null}
       </div>
 
@@ -1256,5 +1192,57 @@ export function StudioApp() {
         </div>
       </nav>
     </main>
+  );
+}
+
+function BenchLinks({
+  colabUrl,
+  kaggleUrl,
+  onColab,
+  onKaggle,
+  onTest,
+  busy,
+  badge,
+}: {
+  colabUrl: string;
+  kaggleUrl: string;
+  onColab: (value: string) => void;
+  onKaggle: (value: string) => void;
+  onTest: (value: string) => void;
+  busy: boolean;
+  badge: string | null;
+}) {
+  const colab = safeHttp(colabUrl);
+  const kaggle = safeHttp(kaggleUrl);
+  return (
+    <div className="space-y-3 rounded-2xl bg-ink-2 p-4">
+      <h3 className="text-lg text-paper">Colab and Kaggle</h3>
+      <p className="text-xs text-muted">Notebook links are not saved. Test hits the live worker health check.</p>
+      <label className="block" htmlFor="colab-url">
+        <span className="text-sm font-medium text-paper">Colab URL</span>
+        <input id="colab-url" value={colabUrl} onChange={(event) => onColab(event.target.value)} placeholder="https://colab.research.google.com/…" inputMode="url" autoComplete="off" className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted" />
+      </label>
+      <div className="grid grid-cols-2 gap-2">
+        <a href={colab ?? undefined} target="_blank" rel="noreferrer" aria-disabled={!colab} className={`flex min-h-11 items-center justify-center rounded-xl bg-panel text-sm font-semibold text-paper ${colab ? "" : "pointer-events-none opacity-50"}`}>
+          Open Colab
+        </a>
+        <button type="button" onClick={() => onTest(colabUrl)} disabled={busy} className="min-h-11 rounded-xl bg-seal text-sm font-semibold text-paper disabled:opacity-50">
+          Test & Connect
+        </button>
+      </div>
+      <label className="block" htmlFor="kaggle-url">
+        <span className="text-sm font-medium text-paper">Kaggle URL</span>
+        <input id="kaggle-url" value={kaggleUrl} onChange={(event) => onKaggle(event.target.value)} placeholder="https://www.kaggle.com/code/…" inputMode="url" autoComplete="off" className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted" />
+      </label>
+      <div className="grid grid-cols-2 gap-2">
+        <a href={kaggle ?? undefined} target="_blank" rel="noreferrer" aria-disabled={!kaggle} className={`flex min-h-11 items-center justify-center rounded-xl bg-panel text-sm font-semibold text-paper ${kaggle ? "" : "pointer-events-none opacity-50"}`}>
+          Open Kaggle
+        </a>
+        <button type="button" onClick={() => onTest(kaggleUrl)} disabled={busy} className="min-h-11 rounded-xl bg-seal text-sm font-semibold text-paper disabled:opacity-50">
+          Test & Connect
+        </button>
+      </div>
+      {badge ? <p className="badge-ok rounded-xl px-3 py-2 text-sm font-semibold">{badge}</p> : null}
+    </div>
   );
 }

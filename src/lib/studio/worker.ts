@@ -1,4 +1,13 @@
-const PATHS = ["/api/v1/health", "/api/v1/jobs", "/api/v1/direct", "/api/v1/paint", "/api/v1/speak"] as const;
+const PATHS = [
+  "/api/v1/health",
+  "/api/v1/jobs",
+  "/api/v1/direct",
+  "/api/v1/paint",
+  "/api/v1/speak",
+  "/api/v1/llm",
+  "/api/v1/youtube-upload",
+  "/api/v1/preview.mp4",
+] as const;
 
 export type WorkerPath = (typeof PATHS)[number];
 

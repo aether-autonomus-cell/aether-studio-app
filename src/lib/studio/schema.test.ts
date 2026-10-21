@@ -8,7 +8,7 @@ test("sample export is job packet v2", () => {
   const parsed = jobPacketV2Schema.parse(packet);
   assert.equal(parsed.version, 2);
   assert.equal(parsed.language, "en");
-  assert.equal(parsed.voice, "en-IN-PrabhatNeural");
+  assert.equal(parsed.voice, "en-US-ChristopherNeural");
   assert.equal(parsed.chapters.length, 1);
   assert.equal(parsed.chapters[0].scenes.length, 4);
   const opening = parsed.chapters[0].scenes[0];

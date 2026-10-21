@@ -1,15 +1,23 @@
 import { createServerFn } from "@tanstack/react-start";
-import type { AiProvider } from "@/lib/studio/config";
 import { studioConfig } from "@/lib/studio/config";
+import {
+  cloudRequest,
+  directorSystem,
+  readSession,
+  shouldFailover,
+  textFromModel,
+  type AiSession,
+} from "@/lib/studio/ai-router";
 import { htmlToText, sanitizeNovelText } from "@/lib/studio/extract";
-import { fetchWtrChapter, parseWtrChapterUrl } from "@/lib/studio/wtr";
+import { containsHan, fetchWtrChapter, parseWtrChapterUrl } from "@/lib/studio/wtr";
 import { assertJobId, jobResourcePath, parseJobStatus, readJobId, type JobSnapshot } from "@/lib/studio/jobs";
 import type { Character, Scene, Seo } from "@/lib/studio/model";
-import { detectLanguage, jobPacketV2Schema, voiceFor } from "@/lib/studio/schema";
+import { jobPacketV2Schema } from "@/lib/studio/schema";
 import { workerEndpoint, type WorkerPath } from "@/lib/studio/worker";
 
 type Direction = {
   title: string;
+  hook: string;
   logline: string;
   timeline: string[];
   characters: Character[];
@@ -24,42 +32,16 @@ function clip(text: string, max: number): string {
   return `${clean.slice(0, max - 1).trimEnd()}…`;
 }
 
-function readGeminiKey(input: unknown): string {
-  const raw =
-    typeof (input as { geminiKey?: unknown })?.geminiKey === "string"
-      ? (input as { geminiKey: string }).geminiKey
-      : "";
-  const key = raw.replace(/\s+/g, "").replace(/^["']|["']$/g, "");
-  if (key.length > 256) throw new Error("That Gemini key is too long.");
-  return key;
-}
-
-function readProvider(input: unknown): { provider: AiProvider; workerUrl: string; workerToken: string; geminiKey: string } {
-  const row = input as { provider?: unknown; workerUrl?: unknown; workerToken?: unknown };
-  const workerToken = typeof row?.workerToken === "string" ? row.workerToken : "";
-  if (workerToken.length > 500) throw new Error("That token is too long.");
-  return {
-    provider: row?.provider === "worker" ? "worker" : "gemini",
-    workerUrl: typeof row?.workerUrl === "string" ? row.workerUrl : "",
-    workerToken,
-    geminiKey: readGeminiKey(input),
-  };
-}
-
-function resolveGeminiKey(fromClient: string): string | null {
-  if (fromClient) return fromClient;
-  const key = process.env.GEMINI_API_KEY?.trim();
-  return key || null;
-}
-
-const DIRECTOR_SYSTEM =
-  "You direct an original motion comic. Return only JSON. Separate soul (identity, choices) from vessel (the current body). If a body changes, keep the soul and describe the new vessel. Include every beat in this excerpt as its own scene. Do not stop at 4 or 6 scenes and do not drop the ending. imagePrompt is a vertical illustrated panel with no text, letters, logos, or speech bubbles. sfx is one short word or empty. narration reads this excerpt in order. No markdown.";
-
-async function geminiText(apiKey: string, system: string, user: string): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+async function geminiText(
+  apiKey: string,
+  system: string,
+  user: string,
+  model: string = studioConfig.geminiModel,
+): Promise<{ ok: true; text: string } | { ok: false; error: string; status: number }> {
   let res: Response;
   try {
     res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${studioConfig.geminiModel}:generateContent`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
@@ -72,19 +54,107 @@ async function geminiText(apiKey: string, system: string, user: string): Promise
       },
     );
   } catch {
-    return { ok: false, error: "Gemini did not answer." };
+    return { ok: false, error: "Gemini did not answer.", status: 0 };
   }
   const raw = await res.text();
-  if (!res.ok) return { ok: false, error: `Gemini could not finish that call (${res.status}).` };
+  if (!res.ok) return { ok: false, error: `Gemini could not finish that call (${res.status}).`, status: res.status };
   let body: { candidates?: { content?: { parts?: { text?: string }[] } }[] };
   try {
     body = JSON.parse(raw) as typeof body;
   } catch {
-    return { ok: false, error: "Gemini returned a plan this studio could not read." };
+    return { ok: false, error: "Gemini returned a plan this studio could not read.", status: res.status };
   }
   const text = body.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") ?? "";
-  if (!text.trim()) return { ok: false, error: "Gemini returned an empty plan." };
+  if (!text.trim()) return { ok: false, error: "Gemini returned an empty plan.", status: res.status };
   return { ok: true, text };
+}
+
+async function openaiText(
+  call: { url: string; model: string; headers: Record<string, string> },
+  system: string,
+  user: string,
+  jsonMode: boolean,
+): Promise<{ ok: true; text: string } | { ok: false; error: string; status: number }> {
+  let res: Response;
+  try {
+    res = await fetch(call.url, {
+      method: "POST",
+      headers: call.headers,
+      signal: AbortSignal.timeout(45000),
+      body: JSON.stringify({
+        model: call.model,
+        temperature: 0.4,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
+      }),
+    });
+  } catch {
+    return { ok: false, error: "The cloud model did not answer.", status: 0 };
+  }
+  const raw = await res.text();
+  const hidden = raw.split(call.headers.Authorization ?? "").join("[redacted]");
+  if (!res.ok) {
+    return { ok: false, error: hidden.slice(0, 280) || `Cloud model returned ${res.status}.`, status: res.status };
+  }
+  try {
+    const text = textFromModel(JSON.parse(raw));
+    if (!text.trim()) return { ok: false, error: "The cloud model returned an empty plan.", status: res.status };
+    return { ok: true, text };
+  } catch {
+    return { ok: false, error: "The cloud model returned a plan this studio could not read.", status: res.status };
+  }
+}
+
+async function callCloud(
+  session: AiSession,
+  system: string,
+  user: string,
+  jsonMode: boolean,
+): Promise<{ ok: true; text: string } | { ok: false; error: string; status: number }> {
+  const call = cloudRequest(session);
+  if (!call) return { ok: false, error: "No cloud API key in this tab.", status: 0 };
+  if (call.kind === "gemini") return geminiText(call.apiKey, system, user, call.model);
+  const first = await openaiText(call, system, user, jsonMode);
+  if (first.ok || !jsonMode || first.status === 0) return first;
+  return openaiText(call, system, user, false);
+}
+
+async function callLocal(
+  session: AiSession,
+  system: string,
+  user: string,
+): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+  if (!session.workerUrl.trim()) return { ok: false, error: "No Colab or Kaggle worker is connected." };
+  const result = await workerPost("/api/v1/llm", session.workerUrl, session.workerToken, {
+    system,
+    prompt: user,
+    model_mode: session.localModel,
+    language: session.language,
+  });
+  if (!result.ok) return result;
+  const text = textFromModel(result.json);
+  if (!text.trim()) return { ok: false, error: "Local AI returned an empty script." };
+  return { ok: true, text };
+}
+
+export async function callActiveAI(
+  session: AiSession,
+  system: string,
+  user: string,
+): Promise<{ ok: true; text: string; via: "cloud" | "local" } | { ok: false; error: string }> {
+  const cloud = await callCloud(session, system, user, true);
+  if (cloud.ok) return { ok: true, text: cloud.text, via: "cloud" };
+  const workerReady = Boolean(session.workerUrl.trim());
+  if (!session.apiKey.trim() && !workerReady) {
+    return { ok: false, error: "Add a cloud API key or connect the Colab/Kaggle worker. Nothing is saved on this phone." };
+  }
+  if (!workerReady || !shouldFailover(cloud.status, cloud.error)) return { ok: false, error: cloud.error };
+  const local = await callLocal(session, system, user);
+  if (local.ok) return { ok: true, text: local.text, via: "local" };
+  return { ok: false, error: local.error || cloud.error };
 }
 
 async function workerPost(
@@ -127,104 +197,102 @@ async function workerPost(
   }
 }
 
-export const providerStatus = createServerFn({ method: "POST" })
-  .validator(() => ({}))
-  .handler(async () => ({
-    geminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
-    geminiModel: studioConfig.geminiModel,
-    geminiImageModel: studioConfig.geminiImageModel,
-    xaiEnabled: studioConfig.xaiEnabled,
-  }));
-
 export const directChapter = createServerFn({ method: "POST" })
   .validator((input: unknown) => {
     const text = typeof (input as { text?: unknown })?.text === "string" ? (input as { text: string }).text.trim() : "";
     if (text.length < 40) throw new Error("Paste at least a short chapter.");
     if (text.length > 9000) throw new Error("That chunk is too long. The studio splits a long chapter before asking.");
-    return { text, ...readProvider(input) };
+    return { text, session: readSession(input) };
   })
-  .handler(async ({ data }): Promise<{ ok: true; direction: Direction } | { ok: false; error: string }> => {
-    let content = "";
-    if (data.provider === "worker") {
-      const result = await workerPost("/api/v1/direct", data.workerUrl, data.workerToken, {
-        text: data.text,
-        language: detectLanguage(data.text),
-      });
-      if (!result.ok) return result;
-      content = typeof result.json === "string" ? result.json : JSON.stringify(result.json);
-    } else {
-      const apiKey = resolveGeminiKey(data.geminiKey);
-      if (!apiKey) {
-        return { ok: false, error: "Add a Gemini API key in Settings. It is saved only in this browser." };
+  .handler(async ({ data }): Promise<{ ok: true; direction: Direction; via: "cloud" | "local" } | { ok: false; error: string }> => {
+    const system = directorSystem(data.session.language);
+    const user = containsHan(data.text)
+      ? `Source chapter (translate every Chinese character; do not copy Chinese into the JSON):\n${data.text}`
+      : data.text;
+    let result = await callActiveAI(data.session, system, user);
+    if (!result.ok) return result;
+    let via: "cloud" | "local" = result.via;
+    let direction = parseDirection(result.text);
+    if (direction && containsHan(`${direction.narration}\n${direction.hook}\n${direction.scenes.map((scene) => `${scene.caption} ${scene.dialogue}`).join("\n")}`)) {
+      const retry = await callActiveAI(
+        data.session,
+        system,
+        `The previous JSON still contained Chinese. Translate it fully into ${data.session.language === "hi" ? "Hindi" : "English"} and return JSON only.\n${result.text.slice(0, 6000)}`,
+      );
+      if (retry.ok) {
+        const again = parseDirection(retry.text);
+        if (again) {
+          direction = again;
+          via = retry.via;
+        }
       }
-      const result = await geminiText(apiKey, DIRECTOR_SYSTEM, data.text);
-      if (!result.ok) return result;
-      content = result.text;
     }
-    const direction = parseDirection(content);
     if (!direction) return { ok: false, error: "The director returned a plan this studio could not read." };
+    const spoken = `${direction.narration}\n${direction.hook}\n${direction.scenes.map((scene) => `${scene.caption} ${scene.dialogue}`).join("\n")}`;
+    if (containsHan(spoken)) return { ok: false, error: "The script still had Chinese in it. Run the director again." };
     if (!direction.narration) {
-      direction.narration = direction.scenes
-        .map((scene) => [scene.caption, scene.dialogue].filter(Boolean).join(" "))
+      direction.narration = [direction.hook, ...direction.scenes.map((scene) => [scene.caption, scene.dialogue].filter(Boolean).join(" "))]
+        .filter(Boolean)
         .join(" ")
         .replace(/\s+/g, " ")
         .trim();
     }
-    return { ok: true, direction };
+    return { ok: true, direction, via };
   });
 
 export const paintPanel = createServerFn({ method: "POST" })
   .validator((input: unknown) => {
     const prompt = typeof (input as { prompt?: unknown })?.prompt === "string" ? (input as { prompt: string }).prompt.trim() : "";
     if (prompt.length < 8) throw new Error("That panel has no picture note.");
-    return { prompt: prompt.slice(0, 700), ...readProvider(input) };
+    return { prompt: prompt.slice(0, 700), session: readSession(input) };
   })
   .handler(async ({ data }): Promise<{ ok: true; url: string } | { ok: false; error: string }> => {
     const painted = `Vertical manhua comic panel, fictional illustration, no text, no letters, no watermark, no speech bubbles, no logos. ${data.prompt}`;
-    if (data.provider === "worker") {
-      const result = await workerPost("/api/v1/paint", data.workerUrl, data.workerToken, {
+    const paintWorker = async () => {
+      const result = await workerPost("/api/v1/paint", data.session.workerUrl, data.session.workerToken, {
         prompt: painted,
         negative: "text, letters, logos, watermark, speech bubbles",
       });
       if (!result.ok) return result;
       const row = result.json && typeof result.json === "object" ? (result.json as Record<string, unknown>) : {};
-      if (typeof row.url === "string" && row.url) return { ok: true, url: row.url };
+      if (typeof row.url === "string" && row.url) return { ok: true as const, url: row.url };
       if (typeof row.imageBase64 === "string" && row.imageBase64) {
         const mime = typeof row.mimeType === "string" ? row.mimeType : "image/png";
-        return { ok: true, url: `data:${mime};base64,${row.imageBase64}` };
+        return { ok: true as const, url: `data:${mime};base64,${row.imageBase64}` };
       }
-      return { ok: false, error: "The worker returned no image." };
+      return { ok: false as const, error: "The worker returned no image." };
+    };
+    if (data.session.provider === "gemini" && data.session.apiKey) {
+      let res: Response | null = null;
+      try {
+        res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${studioConfig.geminiImageModel}:generateContent`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-goog-api-key": data.session.apiKey },
+            signal: AbortSignal.timeout(60000),
+            body: JSON.stringify({
+              contents: [{ role: "user", parts: [{ text: painted }] }],
+              generationConfig: { responseModalities: ["IMAGE"] },
+            }),
+          },
+        );
+      } catch {
+        res = null;
+      }
+      if (res?.ok) {
+        let body: { candidates?: { content?: { parts?: { inlineData?: { mimeType?: string; data?: string } }[] } }[] };
+        try {
+          body = JSON.parse(await res.text()) as typeof body;
+        } catch {
+          body = {};
+        }
+        const image = body.candidates?.[0]?.content?.parts?.find((part) => part.inlineData?.data)?.inlineData;
+        if (image?.data) return { ok: true, url: `data:${image.mimeType || "image/png"};base64,${image.data}` };
+      }
     }
-    const apiKey = resolveGeminiKey(data.geminiKey);
-    if (!apiKey) return { ok: false, error: "Add a Gemini API key in Settings. It is saved only in this browser." };
-    let res: Response;
-    try {
-      res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${studioConfig.geminiImageModel}:generateContent`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-          signal: AbortSignal.timeout(60000),
-          body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: painted }] }],
-            generationConfig: { responseModalities: ["IMAGE"] },
-          }),
-        },
-      );
-    } catch {
-      return { ok: false, error: "Gemini did not answer." };
-    }
-    const raw = await res.text();
-    if (!res.ok) return { ok: false, error: `Gemini could not paint that panel (${res.status}).` };
-    let body: { candidates?: { content?: { parts?: { inlineData?: { mimeType?: string; data?: string } }[] } }[] };
-    try {
-      body = JSON.parse(raw) as typeof body;
-    } catch {
-      return { ok: false, error: "Gemini returned a picture this studio could not read." };
-    }
-    const image = body.candidates?.[0]?.content?.parts?.find((part) => part.inlineData?.data)?.inlineData;
-    if (!image?.data) return { ok: false, error: "The painter returned no image." };
-    return { ok: true, url: `data:${image.mimeType || "image/png"};base64,${image.data}` };
+    if (data.session.workerUrl.trim()) return paintWorker();
+    return { ok: false, error: "Painting needs a Gemini key in this tab, or a connected Colab/Kaggle worker." };
   });
 
 export const speakLine = createServerFn({ method: "POST" })
@@ -233,15 +301,16 @@ export const speakLine = createServerFn({ method: "POST" })
     const text = typeof row?.text === "string" ? row.text.trim() : "";
     if (text.length < 2) throw new Error("Nothing to read.");
     const voice = typeof row?.voice === "string" ? row.voice : "";
-    return { text: text.slice(0, 12000), voice, ...readProvider(input) };
+    return { text: text.slice(0, 12000), voice, session: readSession(input) };
   })
   .handler(async ({ data }): Promise<{ ok: true; audioBase64: string; mimeType: string } | { ok: false; error: string }> => {
-    const language = detectLanguage(data.text);
-    if (data.provider === "worker") {
-      const result = await workerPost("/api/v1/speak", data.workerUrl, data.workerToken, {
+    const language = data.session.language;
+    const voice = data.voice.trim() || (language === "hi" ? "hi-IN-MadhurNeural" : "en-US-ChristopherNeural");
+    if (data.session.workerUrl.trim()) {
+      const result = await workerPost("/api/v1/speak", data.session.workerUrl, data.session.workerToken, {
         text: data.text.slice(0, 700),
         language,
-        voice: voiceFor(language, data.voice),
+        voice,
       });
       if (result.ok) {
         const row = result.json && typeof result.json === "object" ? (result.json as Record<string, unknown>) : {};
@@ -252,9 +321,8 @@ export const speakLine = createServerFn({ method: "POST" })
         }
       }
     }
-    const apiKey = resolveGeminiKey(data.geminiKey);
-    if (!apiKey) return { ok: false, error: "No remote voice. Reading on this phone instead." };
-    return geminiSpeak(apiKey, data.text);
+    if (data.session.provider === "gemini" && data.session.apiKey) return geminiSpeak(data.session.apiKey, data.text);
+    return { ok: false, error: "No remote voice. Reading on this phone instead." };
   });
 
 function pcm16ToWav(pcm: Buffer, sampleRate: number): Buffer {
@@ -404,6 +472,7 @@ function parseDirection(raw: string): Direction | null {
   const tags = Array.isArray(seoRaw.tags) ? seoRaw.tags.filter((tag) => typeof tag === "string").slice(0, 8) : [];
   return {
     title: asText(row.title, 80) || "Untitled chapter",
+    hook: asText(row.hook, 320),
     logline: asText(row.logline, 200),
     timeline: Array.isArray(row.timeline) ? row.timeline.filter((note) => typeof note === "string") : [],
     characters: cast,
@@ -854,10 +923,103 @@ export async function fetchWorkerMp4(input: unknown): Promise<{ ok: true; bytes:
   }
   const bytes = new Uint8Array(await res.arrayBuffer());
   if (bytes.byteLength < 64) return { ok: false, error: "The worker returned an empty video." };
-  if (bytes.byteLength > 32_000_000) return { ok: false, error: "That MP4 is larger than 32 MB." };
+  if (bytes.byteLength > 80_000_000) return { ok: false, error: "That MP4 is larger than 80 MB." };
   const contentType = res.headers.get("content-type") ?? "video/mp4";
   if (/json|text\/html|text\/plain/.test(contentType)) {
     return { ok: false, error: redact(new TextDecoder().decode(bytes.slice(0, 280)), token) || "The worker did not return a video." };
   }
   return { ok: true, bytes, contentType: contentType.split(";")[0] || "video/mp4" };
+}
+
+export const verifyCloud = createServerFn({ method: "POST" })
+  .validator((input: unknown) => readSession(input))
+  .handler(async ({ data }): Promise<{ ok: true; badge: string } | { ok: false; error: string }> => {
+    const ping = await callCloud(data, "Reply with exactly OK.", "Reply with exactly OK.", false);
+    if (!ping.ok) return { ok: false, error: ping.error };
+    if (!/ok/i.test(ping.text)) return { ok: false, error: "The model answered, but the check did not pass." };
+    return { ok: true, badge: "API Verified & Connected — OK" };
+  });
+
+export const uploadYoutube = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const row = input as Record<string, unknown>;
+    const accessToken = typeof row.accessToken === "string" ? row.accessToken.trim() : "";
+    if (accessToken.length < 20 || accessToken.length > 8000) throw new Error("Connect a YouTube channel first.");
+    const jobId = assertJobId(typeof row.jobId === "string" ? row.jobId : "");
+    const target = workerEndpoint(typeof row.url === "string" ? row.url : "", "/api/v1/youtube-upload");
+    const token = typeof row.token === "string" ? row.token : "";
+    if (token.length > 500) throw new Error("That token is too long.");
+    const title = typeof row.title === "string" ? row.title.slice(0, 100) : "";
+    const description = typeof row.description === "string" ? row.description.slice(0, 5000) : "";
+    const tags = Array.isArray(row.tags) ? row.tags.filter((tag) => typeof tag === "string").slice(0, 15) : [];
+    const privacy = row.privacy === "public" || row.privacy === "unlisted" || row.privacy === "private" ? row.privacy : "private";
+    return { href: target.toString(), hostname: target.hostname, token, accessToken, jobId, title, description, tags, privacy };
+  })
+  .handler(async ({ data }): Promise<{ ok: true; watchUrl: string } | { ok: false; error: string }> => {
+    const blocked = await assertPublic(data.hostname);
+    if (blocked) return { ok: false, error: blocked };
+    let res: Response;
+    try {
+      res = await fetch(data.href, {
+        method: "POST",
+        redirect: "manual",
+        signal: AbortSignal.timeout(120000),
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Aether-Token": data.token,
+        },
+        body: JSON.stringify({
+          jobId: data.jobId,
+          accessToken: data.accessToken,
+          title: data.title,
+          description: data.description,
+          tags: data.tags,
+          privacy: data.privacy,
+        }),
+      });
+    } catch {
+      return { ok: false, error: "The worker did not upload the video." };
+    }
+    const raw = (await res.text()).split(data.accessToken).join("[redacted]").split(data.token).join("[redacted]");
+    if (!res.ok) return { ok: false, error: raw.slice(0, 280) || `YouTube upload returned ${res.status}.` };
+    try {
+      const json = JSON.parse(raw) as { watchUrl?: unknown };
+      if (typeof json.watchUrl === "string" && /^https:\/\/www\.youtube\.com\/watch\?v=[\w-]{6,}$/.test(json.watchUrl)) {
+        return { ok: true, watchUrl: json.watchUrl };
+      }
+    } catch {
+      /* fall through */
+    }
+    return { ok: false, error: "The worker did not return a YouTube link." };
+  });
+
+export async function fetchWorkerPreview(input: unknown): Promise<{ ok: true; bytes: Uint8Array; contentType: string } | { ok: false; error: string }> {
+  const row = input as { url?: unknown; token?: unknown };
+  const token = typeof row?.token === "string" ? row.token : "";
+  if (token.length > 500) return { ok: false, error: "That token is too long." };
+  let target: URL;
+  try {
+    target = workerEndpoint(typeof row?.url === "string" ? row.url : "", "/api/v1/preview.mp4");
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "That worker URL is not valid." };
+  }
+  const blocked = await assertPublic(target.hostname);
+  if (blocked) return { ok: false, error: blocked };
+  let res: Response;
+  try {
+    res = await fetch(target, {
+      method: "GET",
+      redirect: "manual",
+      signal: AbortSignal.timeout(30000),
+      headers: { Accept: "video/mp4, application/octet-stream", "X-Aether-Token": token },
+    });
+  } catch {
+    return { ok: false, error: "The 6 second preview did not load." };
+  }
+  if (res.status >= 300 && res.status < 400) return { ok: false, error: "The worker redirected the preview." };
+  if (!res.ok) return { ok: false, error: "Render the video first. The 6 second preview is not ready." };
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  if (bytes.byteLength < 64 || bytes.byteLength > 12_000_000) return { ok: false, error: "That preview was empty or too large." };
+  return { ok: true, bytes, contentType: "video/mp4" };
 }

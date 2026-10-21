@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cutChapter, dialogueWithoutSpeaker, jobPacket, mergeCuts, projectFromChapters } from "./model.ts";
+import { cutChapter, dialogueWithoutSpeaker, jobPacket, mergeCuts, projectFromChapters, projectWithAbsoluteArt } from "./model.ts";
 import { jobPacketV2Schema } from "./schema.ts";
 
 test("phone cut keeps more than six scenes and the full narration", () => {
@@ -50,4 +50,28 @@ test("direction chunks merge instead of keeping only the first cut", () => {
   const merged = mergeCuts([make(1), make(2)]);
   assert.ok(merged.scenes.length > 2);
   assert.equal(merged.chapters, undefined);
+});
+
+test("panel paths become absolute before the worker renders them", () => {
+  const next = projectWithAbsoluteArt(
+    {
+      ...cutChapter("Bridge Night\n\nRain argued with the lanterns while Ren kept his eyes on the stone."),
+      scenes: [
+        {
+          id: "s1",
+          caption: "Rain.",
+          dialogue: "",
+          speaker: "",
+          sfx: "",
+          state: "",
+          imagePrompt: "bridge",
+          imageUrl: "/panels/01-bridge.jpg",
+        },
+      ],
+    },
+    "https://studio.example",
+  );
+  assert.equal(next.scenes[0].imageUrl, "https://studio.example/panels/01-bridge.jpg");
+  const kept = projectWithAbsoluteArt(next, "https://other.example");
+  assert.equal(kept.scenes[0].imageUrl, "https://studio.example/panels/01-bridge.jpg");
 });

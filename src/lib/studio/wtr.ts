@@ -209,6 +209,10 @@ async function collectChapterText(json: unknown): Promise<{ title: string; lines
   return { title, lines };
 }
 
+export function containsHan(text: string): boolean {
+  return /\p{Script=Han}/u.test(text);
+}
+
 export async function fetchWtrChapter(target: WtrTarget): Promise<{ title: string; text: string } | null> {
   const headers = browserHeaders(target.referer, true);
   const list = await readJson(

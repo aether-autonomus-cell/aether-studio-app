@@ -8,7 +8,7 @@ export const DEFAULT_NEGATIVE =
 
 export const VOICE_BY_LANGUAGE = {
   hi: "hi-IN-MadhurNeural",
-  en: "en-IN-PrabhatNeural",
+  en: "en-US-ChristopherNeural",
 } as const;
 
 export const languageSchema = z.enum(["hi", "en"]);
@@ -32,6 +32,7 @@ export const packetSceneSchema = z.object({
   sfx: z.string(),
   state: z.string(),
   bubble: bubbleSchema,
+  image_url: z.string().max(1_200_000).optional(),
   tiles: z.array(tileSchema).min(1),
 });
 
@@ -63,6 +64,9 @@ export const jobPacketV2Schema = z.object({
   language: languageSchema,
   voice: z.string().min(1),
   title: z.string().min(1),
+  aspect: z.enum(["16:9", "9:16"]).default("16:9"),
+  local_model: z.enum(["gguf", "airllm", "fast"]).default("gguf"),
+  hook: z.string().default(""),
   chapters: z.array(chapterSchema).min(1),
   seo: seoSchema,
   note: z.string(),

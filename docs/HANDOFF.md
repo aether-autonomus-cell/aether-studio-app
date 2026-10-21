@@ -1,7 +1,0 @@
-- The Gemini key, worker, Colab, Kaggle, chapter link, and YouTube fields are light paper boxes with dark type. They stay visible on the dark page and on Android password inputs.
-- A Gemini key can be typed in Settings. It is stored in this browser (`localStorage`) and sent only with that phone's direct, paint, and voice calls. `GEMINI_API_KEY` on the server is an optional fallback, not a requirement. The screen does not ask you to pick a model.
-- Paint walks every unpainted panel in the chapter. It is not capped at four.
-- Chapter pulls follow the start and end you type, up to 2,000 in one go. The old 40-chapter wall is gone. The rights checkbox is gone.
-- Pasted and fetched chapter text drops WTR-LAB chrome (`Ch. 586/616`, `95.1% Web`, `#586Chapter`, menus) before the cut, the bubbles, and the YouTube card.
-- Colab and Kaggle notebook URLs are separate fields in Settings and Bay. They stay in this browser.
-- Read uses Gemini voice when a key is saved, then this phone. Android starts speech in the tap, waits for the voice list, and does not stop just because a voice is unlabeled.

@@ -67,6 +67,9 @@ export type Project = {
   chapters?: Chapter[];
   language?: "hi" | "en";
   voice?: string;
+  hook?: string;
+  aspect?: "16:9" | "9:16";
+  localModel?: "gguf" | "airllm" | "fast";
 };
 
 export const SAMPLE_TEXT = `The Lantern Debt
@@ -437,12 +440,14 @@ function tilesFor(scene: Scene, characters: Character[]): PacketScene["tiles"] {
 }
 
 function scenePacket(scene: Scene, characters: Character[]): PacketScene {
+  const image = scene.imageUrl && scene.imageUrl.length > 0 && scene.imageUrl.length <= 1_200_000 ? scene.imageUrl : undefined;
   return {
     id: scene.id,
     caption: scene.caption,
     sfx: scene.sfx,
     state: scene.state,
     bubble: { speaker: scene.speaker, text: scene.dialogue },
+    ...(image ? { image_url: image } : {}),
     tiles: tilesFor(scene, characters),
   };
 }
@@ -461,6 +466,23 @@ function chapterPacket(chapter: Chapter): PacketChapter {
       vessel_id: id,
     })),
     scenes: chapter.scenes.map((scene) => scenePacket(scene, chapter.characters)),
+  };
+}
+
+export function projectWithAbsoluteArt(project: Project, origin: string): Project {
+  const fix = (url: string | null): string | null => {
+    if (!url) return url;
+    if (/^https?:\/\//i.test(url) || url.startsWith("data:")) return url;
+    if (url.startsWith("/") && /^https?:\/\//i.test(origin)) return `${origin.replace(/\/$/, "")}${url}`;
+    return url;
+  };
+  return {
+    ...project,
+    scenes: project.scenes.map((scene) => ({ ...scene, imageUrl: fix(scene.imageUrl) })),
+    chapters: project.chapters?.map((chapter) => ({
+      ...chapter,
+      scenes: chapter.scenes.map((scene) => ({ ...scene, imageUrl: fix(scene.imageUrl) })),
+    })),
   };
 }
 
@@ -483,107 +505,17 @@ export function jobPacket(project: Project): JobPacket {
     language,
     voice: voiceFor(language, project.voice),
     title: project.title.trim() || "Untitled chapter",
+    aspect: project.aspect === "9:16" ? "9:16" : "16:9",
+    local_model: project.localModel === "airllm" || project.localModel === "fast" ? project.localModel : "gguf",
+    hook: project.hook ?? "",
     chapters,
     seo: {
       title: project.seo.title,
       description: project.seo.description,
       tags: project.seo.tags,
     },
-    note: "Job packet v2. Text the author supplied. Do not fetch paywalled pages. Bubbles and sfx are composited after the tiles, never painted into them.",
+    note: "Job packet v2. Explanation video. Do not fetch paywalled pages. Panels are prompts for the GPU render, not a static strip.",
   });
 }
 
-export const FACTORY_CELL = `import json, asyncio, subprocess
-from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont
-
-ROOT = Path(".")
-found = list(ROOT.glob("job.json"))
-if Path("/kaggle/input").exists():
-    found += list(Path("/kaggle/input").glob("*/job.json"))
-if not found:
-    raise SystemExit("Upload job.json from Aether Studio (Bay, Copy job packet).")
-job = json.loads(found[0].read_text())
-out = ROOT / "aether_out"
-out.mkdir(exist_ok=True)
-W, H = 720, 1080
-
-def font(size):
-    path = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
-    return ImageFont.truetype(str(path), size) if path.exists() else ImageFont.load_default()
-
-def render(i, scene):
-    im = Image.new("RGB", (W, H), (20, 17, 15))
-    name = Path(str(scene.get("imageUrl") or "")).name
-    local = ROOT / name if name else None
-    if local and local.exists():
-        art = Image.open(local).convert("RGB")
-        art = art.resize((W, H))
-        im.paste(art, (0, 0))
-    d = ImageDraw.Draw(im, "RGBA")
-    sfx = (scene.get("sfx") or "").strip()
-    if sfx:
-        d.text((36, 40), sfx, font=font(64), fill=(226, 75, 50, 255))
-    dialogue = (scene.get("dialogue") or "").strip()
-    if dialogue:
-        d.rounded_rectangle((36, H - 300, W - 36, H - 96), 28, fill=(243, 234, 219, 235))
-        d.text((56, H - 276), (scene.get("speaker") or "")[:32], font=font(22), fill=(158, 38, 22, 255))
-        d.text((56, H - 236), dialogue[:160], font=font(28), fill=(20, 17, 15, 255))
-    caption = (scene.get("caption") or "").strip()
-    if caption:
-        d.rectangle((0, H - 80, W, H), fill=(20, 17, 15, 235))
-        d.text((24, H - 52), caption[:88], font=font(22), fill=(243, 234, 219, 255))
-    path = out / f"panel_{i:02d}.png"
-    im.save(path)
-    return path
-
-def flatten(packet):
-    chapters = packet.get("chapters")
-    if isinstance(chapters, list) and chapters:
-        rows = []
-        notes = []
-        for chapter in chapters:
-            note = (chapter.get("narration") or "").strip()
-            if note:
-                notes.append(note)
-            for scene in chapter.get("scenes") or []:
-                bubble = scene.get("bubble") or {}
-                rows.append({
-                    "caption": scene.get("caption") or "",
-                    "dialogue": bubble.get("text") or scene.get("dialogue") or "",
-                    "speaker": bubble.get("speaker") or scene.get("speaker") or "",
-                    "sfx": scene.get("sfx") or "",
-                    "imageUrl": scene.get("imageUrl") or "",
-                })
-        return rows, notes
-    return packet.get("scenes") or [], [packet.get("narration") or ""]
-
-flat_scenes, chapter_notes = flatten(job)
-paths = [render(i, s) for i, s in enumerate(flat_scenes, 1)]
-if not paths:
-    raise SystemExit("Job packet has no scenes.")
-joined = " ".join(note for note in chapter_notes if note).strip()
-text = (joined or job.get("narration") or job.get("title") or "Aether")[:4000]
-devanagari = any("\\u0900" <= ch <= "\\u097f" for ch in text)
-voice_id = (job.get("voice") or "").strip() or ("hi-IN-MadhurNeural" if job.get("language") == "hi" or devanagari else "en-IN-PrabhatNeural")
-voice = out / "voice.mp3"
-try:
-    import edge_tts
-    async def speak():
-        await edge_tts.Communicate(text, voice_id).save(str(voice))
-    asyncio.run(speak())
-except Exception as exc:
-    raise SystemExit(f"Male voice failed ({voice_id}). Not switching to another voice. {exc}")
-
-trim = out / "voice.trim.mp3"
-subprocess.check_call(["ffmpeg", "-y", "-i", str(voice), "-af",
-    "silenceremove=start_periods=1:start_threshold=-40dB:start_silence=0.12:stop_periods=1:stop_threshold=-40dB:stop_silence=0.25",
-    str(trim)])
-lst = out / "list.txt"
-lst.write_text("".join(f"file '{p.resolve()}'\\nduration 4\\n" for p in paths) + f"file '{paths[-1].resolve()}'\\n")
-mp4 = out / "aether.mp4"
-subprocess.check_call(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-i", str(trim),
-    "-vf", "scale=720:1080,format=yuv420p", "-c:v", "libx264", "-c:a", "aac", "-shortest",
-    "-movflags", "+faststart", str(mp4)])
-print("READY", mp4.resolve())
-`;
+export { FACTORY_CELL } from "./factory-cell.ts";

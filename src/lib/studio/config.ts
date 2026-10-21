@@ -1,4 +1,4 @@
-/** Fixed model ids. The phone does not ask the user to pick one. A typed Gemini key overrides the server env. */
+/** Fixed paint/voice model ids. Chat models are chosen in Settings and are not stored. */
 export const studioConfig = {
   /** xAI / Grok endpoints are not called. This flag stays off. */
   xaiEnabled: false,
@@ -8,5 +8,3 @@ export const studioConfig = {
   geminiVoice: "Charon",
   geminiTtsModel: "gemini-2.5-flash-preview-tts",
 } as const;
-
-export type AiProvider = "gemini" | "worker";
