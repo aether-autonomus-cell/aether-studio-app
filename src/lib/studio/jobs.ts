@@ -7,6 +7,8 @@ export type JobSnapshot = {
   label: string;
   error: string;
   mp4Url: string | null;
+  timing: Record<string, number>;
+  voices: Record<string, string>;
 };
 
 const ID_RE = /^[A-Za-z0-9._-]{1,80}$/;
@@ -91,6 +93,28 @@ function mp4Of(row: Record<string, unknown>): string | null {
   return null;
 }
 
+function timingOf(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object") return {};
+  const out: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!ID_RE.test(key)) continue;
+    const n = typeof raw === "number" ? raw : Number(raw);
+    if (Number.isFinite(n) && n > 0 && n <= 180) out[key] = Math.round(n * 1000) / 1000;
+  }
+  return out;
+}
+
+function voicesOf(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object") return {};
+  const out: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!ID_RE.test(key) || typeof raw !== "string") continue;
+    const path = raw.trim();
+    if (path.startsWith("/api/v1/voices/") && path.length < 180) out[key] = path;
+  }
+  return out;
+}
+
 export function parseJobStatus(json: unknown, fallbackId: string): JobSnapshot {
   const root = json && typeof json === "object" ? (json as Record<string, unknown>) : {};
   const row =
@@ -113,5 +137,7 @@ export function parseJobStatus(json: unknown, fallbackId: string): JobSnapshot {
     label: status === "error" ? "" : label || (status === "running" ? message : ""),
     error: errorText,
     mp4Url: mp4Of(row),
+    timing: timingOf(row.timing),
+    voices: voicesOf(row.voices),
   };
 }

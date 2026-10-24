@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cloudRequest, readSession, shouldFailover, textFromModel } from "./ai-router.ts";
+import { cloudRequest, imageVia, readSession, shouldFailover, textFromModel, textVia } from "./ai-router.ts";
 
 const blank = {
   provider: "zai" as const,
@@ -11,6 +11,7 @@ const blank = {
   workerToken: "",
   localModel: "gguf" as const,
   language: "en" as const,
+  duty: "split" as const,
 };
 
 test("a missing key does not call the cloud", () => {
@@ -48,4 +49,14 @@ test("session reading keeps a worker-only call off the cloud key", () => {
 test("local model text is read from OpenAI-style or plain JSON", () => {
   assert.equal(textFromModel({ choices: [{ message: { content: "{\"title\":\"Gate\"}" } }] }), "{\"title\":\"Gate\"}");
   assert.equal(textFromModel({ text: "hook" }), "hook");
+});
+
+test("split mode lets the key write and the worker paint", () => {
+  assert.equal(textVia("split", true, true), "key");
+  assert.equal(imageVia("split", true), "worker");
+  assert.equal(textVia("worker", true, true), "worker");
+  assert.equal(imageVia("key", true), "fallback");
+  assert.equal(textVia("split", false, true), "worker");
+  const session = readSession({ duty: "worker", apiKey: "sk", workerUrl: "https://example.com" });
+  assert.equal(session.duty, "worker");
 });

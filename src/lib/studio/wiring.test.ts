@@ -46,8 +46,11 @@ test("factory cell exposes the gpu worker the app calls", () => {
     "tensor_split",
     "zoompan",
     "silenceremove",
+    "apad=pad_dur=0.12",
+    "/api/v1/masters/",
   ]) {
     assert.equal(FACTORY_CELL.includes(path), true, path);
   }
   assert.equal(FACTORY_CELL.includes("tensor_split=None"), false);
+  assert.equal(FACTORY_CELL.includes("Generating images"), false);
 });

@@ -3,14 +3,17 @@ import { studioConfig } from "@/lib/studio/config";
 import {
   cloudRequest,
   directorSystem,
+  imageVia,
   readSession,
   shouldFailover,
   textFromModel,
+  textVia,
   type AiSession,
 } from "@/lib/studio/ai-router";
-import { htmlToText, sanitizeNovelText } from "@/lib/studio/extract";
+import { htmlToText, extractPanels, sanitizeNovelText } from "@/lib/studio/extract";
 import { containsHan, fetchWtrChapter, parseWtrChapterUrl } from "@/lib/studio/wtr";
 import { assertJobId, jobResourcePath, parseJobStatus, readJobId, type JobSnapshot } from "@/lib/studio/jobs";
+import { composeLook, parseStudioAction, type StudioAction } from "@/lib/studio/bible";
 import type { Character, Scene, Seo } from "@/lib/studio/model";
 import { jobPacketV2Schema } from "@/lib/studio/schema";
 import { workerEndpoint, type WorkerPath } from "@/lib/studio/worker";
@@ -145,20 +148,29 @@ export async function callActiveAI(
   system: string,
   user: string,
 ): Promise<{ ok: true; text: string; via: "cloud" | "local" } | { ok: false; error: string }> {
-  const cloud = await callCloud(session, system, user, true);
-  if (cloud.ok) return { ok: true, text: cloud.text, via: "cloud" };
-  const workerReady = Boolean(session.workerUrl.trim());
-  if (!session.apiKey.trim() && !workerReady) {
+  const hasKey = Boolean(session.apiKey.trim());
+  const hasWorker = Boolean(session.workerUrl.trim());
+  const via = textVia(session.duty, hasKey, hasWorker);
+  if (via === "none") {
     return { ok: false, error: "Add a cloud API key or connect the Colab/Kaggle worker. Nothing is saved on this phone." };
   }
-  if (!workerReady || !shouldFailover(cloud.status, cloud.error)) return { ok: false, error: cloud.error };
-  const local = await callLocal(session, system, user);
-  if (local.ok) return { ok: true, text: local.text, via: "local" };
-  return { ok: false, error: local.error || cloud.error };
+  if (via === "worker") {
+    const local = await callLocal(session, system, user);
+    if (local.ok) return { ok: true, text: local.text, via: "local" };
+    return { ok: false, error: local.error };
+  }
+  const cloud = await callCloud(session, system, user, true);
+  if (cloud.ok) return { ok: true, text: cloud.text, via: "cloud" };
+  if (session.duty !== "key" && hasWorker && shouldFailover(cloud.status, cloud.error)) {
+    const local = await callLocal(session, system, user);
+    if (local.ok) return { ok: true, text: local.text, via: "local" };
+    return { ok: false, error: local.error || cloud.error };
+  }
+  return { ok: false, error: cloud.error };
 }
 
 async function workerPost(
-  path: WorkerPath,
+  path: string,
   url: string,
   token: string,
   payload: unknown,
@@ -197,18 +209,55 @@ async function workerPost(
   }
 }
 
+async function workerJson(
+  path: string,
+  url: string,
+  token: string,
+): Promise<{ ok: true; json: unknown } | { ok: false; error: string }> {
+  let target: URL;
+  try {
+    target = workerEndpoint(url, path);
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "That worker URL is not valid." };
+  }
+  const blocked = await assertPublic(target.hostname);
+  if (blocked) return { ok: false, error: blocked };
+  if (token) target.searchParams.set("token", token);
+  let res: Response;
+  try {
+    res = await fetch(target, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(60000),
+      headers: { Accept: "application/json", "X-Aether-Token": token },
+    });
+  } catch {
+    return { ok: false, error: "The worker did not answer." };
+  }
+  if (res.status >= 300 && res.status < 400) return { ok: false, error: "The worker redirected. Nothing was sent." };
+  const raw = (await res.text()).split(token).join("[redacted]");
+  if (!res.ok) return { ok: false, error: raw.slice(0, 280) || `Worker returned ${res.status}.` };
+  try {
+    return { ok: true, json: JSON.parse(raw) };
+  } catch {
+    return { ok: true, json: raw };
+  }
+}
+
 export const directChapter = createServerFn({ method: "POST" })
   .validator((input: unknown) => {
-    const text = typeof (input as { text?: unknown })?.text === "string" ? (input as { text: string }).text.trim() : "";
+    const row = input as { text?: unknown; lock?: unknown };
+    const text = typeof row?.text === "string" ? row.text.trim() : "";
     if (text.length < 40) throw new Error("Paste at least a short chapter.");
     if (text.length > 9000) throw new Error("That chunk is too long. The studio splits a long chapter before asking.");
-    return { text, session: readSession(input) };
+    const lock = typeof row.lock === "string" ? row.lock.trim().slice(0, 1800) : "";
+    return { text, lock, session: readSession(input) };
   })
   .handler(async ({ data }): Promise<{ ok: true; direction: Direction; via: "cloud" | "local" } | { ok: false; error: string }> => {
     const system = directorSystem(data.session.language);
+    const lock = data.lock ? `CHARACTER LOCK. Use these looks in every imagePrompt. Do not narrate this lock as extra scenes.\n${data.lock}\n\n` : "";
     const user = containsHan(data.text)
-      ? `Source chapter (translate every Chinese character; do not copy Chinese into the JSON):\n${data.text}`
-      : data.text;
+      ? `${lock}Source chapter (translate every Chinese character; do not copy Chinese into the JSON):\n${data.text}`
+      : `${lock}${data.text}`;
     let result = await callActiveAI(data.session, system, user);
     if (!result.ok) return result;
     let via: "cloud" | "local" = result.via;
@@ -240,90 +289,200 @@ export const directChapter = createServerFn({ method: "POST" })
     return { ok: true, direction, via };
   });
 
+export const writeBeatPrompt = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const row = input as { caption?: unknown; dialogue?: unknown; speaker?: unknown; state?: unknown; chapter?: unknown; lock?: unknown };
+    const caption = typeof row.caption === "string" ? row.caption.slice(0, 400) : "";
+    const dialogue = typeof row.dialogue === "string" ? row.dialogue.slice(0, 400) : "";
+    if (!caption.trim() && !dialogue.trim()) throw new Error("That beat has no line.");
+    const chapter = typeof row.chapter === "number" && Number.isFinite(row.chapter) ? Math.floor(row.chapter) : 0;
+    return {
+      caption,
+      dialogue,
+      speaker: typeof row.speaker === "string" ? row.speaker.slice(0, 40) : "",
+      state: typeof row.state === "string" ? row.state.slice(0, 180) : "",
+      chapter: chapter > 0 && chapter < 100000 ? chapter : 0,
+      lock: typeof row.lock === "string" ? row.lock.slice(0, 1800) : "",
+      session: readSession(input),
+    };
+  })
+  .handler(async ({ data }): Promise<{ ok: true; prompt: string } | { ok: false; error: string }> => {
+    const system = [
+      "Write ONE English image prompt for a single vertical manhua panel. Return JSON only: {\"prompt\":\"...\"}.",
+      "Colored manhwa, clean ink, dramatic close-up or action as this one line needs.",
+      "Paste the character lock in full. No random extra people. No watermark. No letters, logos, or speech bubbles inside the picture.",
+      "Do not translate the prompt. Do not write the spoken line as text in the drawing.",
+    ].join(" ");
+    const user = [
+      data.lock ? `CHARACTER LOCK:\n${data.lock}` : "",
+      `This beat only. Chapter ${data.chapter || "unknown"}. Speaker: ${data.speaker || "narrator"}.`,
+      `Caption: ${data.caption}`,
+      `Dialogue: ${data.dialogue}`,
+      `State: ${data.state}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const result = await callActiveAI(data.session, system, user);
+    if (!result.ok) return result;
+    const start = result.text.indexOf("{");
+    const end = result.text.lastIndexOf("}");
+    let prompt = "";
+    if (start >= 0 && end > start) {
+      try {
+        const parsed = JSON.parse(result.text.slice(start, end + 1)) as { prompt?: unknown };
+        if (typeof parsed.prompt === "string") prompt = parsed.prompt.trim();
+      } catch {
+        prompt = "";
+      }
+    }
+    if (!prompt) prompt = result.text.replace(/\s+/g, " ").trim();
+    prompt = prompt.replace(/^prompt\s*:\s*/i, "").slice(0, 700);
+    if (prompt.length < 8) return { ok: false, error: "The writer did not return a prompt. The picture was not drawn." };
+    return { ok: true, prompt };
+  });
+
+function referenceParts(value: unknown): { reference: string; referenceBase64: string } {
+  if (typeof value !== "string") return { reference: "", referenceBase64: "" };
+  const raw = value.trim();
+  if (/^https:\/\//i.test(raw)) return { reference: raw.slice(0, 2000), referenceBase64: "" };
+  const match = raw.match(/^data:[^;,]+;base64,([a-z0-9+/=\s]+)$/i);
+  if (!match?.[1]) return { reference: "", referenceBase64: "" };
+  const data = match[1].replace(/\s/g, "");
+  if (data.length < 80 || data.length > 900_000) return { reference: "", referenceBase64: "" };
+  return { reference: "", referenceBase64: data };
+}
+
 export const paintPanel = createServerFn({ method: "POST" })
   .validator((input: unknown) => {
-    const prompt = typeof (input as { prompt?: unknown })?.prompt === "string" ? (input as { prompt: string }).prompt.trim() : "";
+    const row = input as { prompt?: unknown; reference?: unknown; repo?: unknown };
+    const prompt = typeof row?.prompt === "string" ? row.prompt.trim() : "";
     if (prompt.length < 8) throw new Error("That panel has no picture note.");
-    return { prompt: prompt.slice(0, 700), session: readSession(input) };
+    const repo = typeof row.repo === "string" ? row.repo.trim().slice(0, 200) : "";
+    return { prompt: prompt.slice(0, 900), repo, ...referenceParts(row.reference), session: readSession(input) };
   })
-  .handler(async ({ data }): Promise<{ ok: true; url: string } | { ok: false; error: string }> => {
-    const painted = `Vertical manhua comic panel, fictional illustration, no text, no letters, no watermark, no speech bubbles, no logos. ${data.prompt}`;
+  .handler(async ({ data }): Promise<{ ok: true; url: string; fallback?: boolean; engine?: string } | { ok: false; error: string }> => {
+    const painted = `Vertical colored manhwa, clean ink, dramatic lighting, consistent character, no text, no letters, no watermark, no speech bubbles. ${data.prompt}`;
     const paintWorker = async () => {
       const result = await workerPost("/api/v1/paint", data.session.workerUrl, data.session.workerToken, {
         prompt: painted,
         negative: "text, letters, logos, watermark, speech bubbles",
+        reference: data.reference,
+        referenceBase64: data.referenceBase64,
+        repo: data.repo,
       });
       if (!result.ok) return result;
       const row = result.json && typeof result.json === "object" ? (result.json as Record<string, unknown>) : {};
-      if (typeof row.url === "string" && row.url) return { ok: true as const, url: row.url };
+      const fallback = row.fallback === true || row.engine === "pollinations" || row.engine === "ink";
+      const engine = typeof row.engine === "string" ? row.engine.slice(0, 40) : "";
+      if (typeof row.url === "string" && row.url) return { ok: true as const, url: row.url, ...(fallback ? { fallback: true } : {}), ...(engine ? { engine } : {}) };
       if (typeof row.imageBase64 === "string" && row.imageBase64) {
         const mime = typeof row.mimeType === "string" ? row.mimeType : "image/png";
-        return { ok: true as const, url: `data:${mime};base64,${row.imageBase64}` };
+        return { ok: true as const, url: `data:${mime};base64,${row.imageBase64}`, ...(fallback ? { fallback: true } : {}), ...(engine ? { engine } : {}) };
       }
       return { ok: false as const, error: "The worker returned no image." };
     };
-    if (data.session.provider === "gemini" && data.session.apiKey) {
-      let res: Response | null = null;
-      try {
-        res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${studioConfig.geminiImageModel}:generateContent`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "x-goog-api-key": data.session.apiKey },
-            signal: AbortSignal.timeout(60000),
-            body: JSON.stringify({
-              contents: [{ role: "user", parts: [{ text: painted }] }],
-              generationConfig: { responseModalities: ["IMAGE"] },
-            }),
-          },
-        );
-      } catch {
-        res = null;
-      }
-      if (res?.ok) {
-        let body: { candidates?: { content?: { parts?: { inlineData?: { mimeType?: string; data?: string } }[] } }[] };
-        try {
-          body = JSON.parse(await res.text()) as typeof body;
-        } catch {
-          body = {};
-        }
-        const image = body.candidates?.[0]?.content?.parts?.find((part) => part.inlineData?.data)?.inlineData;
-        if (image?.data) return { ok: true, url: `data:${image.mimeType || "image/png"};base64,${image.data}` };
-      }
+    const route = imageVia(data.session.duty, Boolean(data.session.workerUrl.trim()));
+    if (route === "worker") {
+      const drawn = await paintWorker();
+      if (drawn.ok) return drawn;
     }
-    if (data.session.workerUrl.trim()) return paintWorker();
-    return { ok: false, error: "Painting needs a Gemini key in this tab, or a connected Colab/Kaggle worker." };
+    const prompt = encodeURIComponent(painted.slice(0, 480));
+    return {
+      ok: true,
+      fallback: true,
+      engine: "pollinations",
+      url: `https://image.pollinations.ai/prompt/${prompt}?width=768&height=1152&nologo=true&model=flux`,
+    };
   });
 
 export const speakLine = createServerFn({ method: "POST" })
   .validator((input: unknown) => {
-    const row = input as { text?: unknown; voice?: unknown };
+    const row = input as { text?: unknown; voice?: unknown; sceneId?: unknown; force?: unknown };
     const text = typeof row?.text === "string" ? row.text.trim() : "";
     if (text.length < 2) throw new Error("Nothing to read.");
     const voice = typeof row?.voice === "string" ? row.voice : "";
-    return { text: text.slice(0, 12000), voice, session: readSession(input) };
+    const sceneId = typeof row.sceneId === "string" ? row.sceneId.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 80) : "";
+    return { text: text.slice(0, 12000), voice, sceneId, force: row.force === true, session: readSession(input) };
   })
-  .handler(async ({ data }): Promise<{ ok: true; audioBase64: string; mimeType: string } | { ok: false; error: string }> => {
+  .handler(async ({ data }): Promise<{ ok: true; audioBase64: string; mimeType: string; audioUrl?: string } | { ok: false; error: string }> => {
     const language = data.session.language;
     const voice = data.voice.trim() || (language === "hi" ? "hi-IN-MadhurNeural" : "en-US-ChristopherNeural");
-    if (data.session.workerUrl.trim()) {
+    if (data.session.workerUrl.trim() && data.session.duty !== "key") {
       const result = await workerPost("/api/v1/speak", data.session.workerUrl, data.session.workerToken, {
         text: data.text.slice(0, 700),
         language,
         voice,
+        sceneId: data.sceneId || "line",
+        force: data.force,
       });
       if (result.ok) {
         const row = result.json && typeof result.json === "object" ? (result.json as Record<string, unknown>) : {};
         const audio = typeof row.audioBase64 === "string" ? row.audioBase64 : "";
-        if (audio.length >= 100) {
-          const mimeType = typeof row.mimeType === "string" && row.mimeType ? row.mimeType : "audio/mpeg";
-          return { ok: true, audioBase64: audio, mimeType };
-        }
+        const audioUrl = typeof row.url === "string" && row.url.startsWith("/api/v1/voices/") ? row.url.slice(0, 180) : "";
+        const mimeType = typeof row.mimeType === "string" && row.mimeType ? row.mimeType : "audio/mpeg";
+        if (audio.length >= 100 || audioUrl) return { ok: true, audioBase64: audio, mimeType, ...(audioUrl ? { audioUrl } : {}) };
       }
     }
-    if (data.session.provider === "gemini" && data.session.apiKey) return geminiSpeak(data.session.apiKey, data.text);
-    return { ok: false, error: "No remote voice. Reading on this phone instead." };
+    if (data.session.provider === "gemini" && data.session.apiKey && data.session.duty === "key") return geminiSpeak(data.session.apiKey, data.text);
+    const edge = await edgeSpeak(data.text, voice);
+    if (edge.ok) return edge;
+    return { ok: false, error: "Microsoft voice did not answer, and the worker has no saved track yet. Connect the worker so a local male voice can speak." };
   });
+
+function escapeSsml(value: string): string {
+  return value
+    .replace(/&/g, "&" + "amp;")
+    .replace(/</g, "&" + "lt;")
+    .replace(/>/g, "&" + "gt;")
+    .replace(/"/g, "&" + "quot;");
+}
+
+async function edgeSpeak(
+  text: string,
+  voice: string,
+): Promise<{ ok: true; audioBase64: string; mimeType: string } | { ok: false; error: string }> {
+  const name = voice.trim() || "en-US-ChristopherNeural";
+  const lang = name.startsWith("hi-") ? "hi-IN" : "en-US";
+  let tokenRes: Response;
+  try {
+    tokenRes = await fetch("https://edge.microsoft.com/translate/auth", {
+      signal: AbortSignal.timeout(12000),
+      headers: { "User-Agent": "Mozilla/5.0" },
+    });
+  } catch {
+    return { ok: false, error: "Free voice did not answer." };
+  }
+  if (!tokenRes.ok) return { ok: false, error: "Free voice refused the token." };
+  const token = (await tokenRes.text()).trim();
+  if (!token) return { ok: false, error: "Free voice returned an empty token." };
+  const pieces = speechChunks(text);
+  const chunks: Buffer[] = [];
+  for (const piece of pieces) {
+    const ssml = `<speak version="1.0" xml:lang="${lang}"><voice name="${escapeSsml(name)}">${escapeSsml(piece)}</voice></speak>`;
+    let res: Response;
+    try {
+      res = await fetch("https://speech.platform.bing.com/cognitiveservices/v1", {
+        method: "POST",
+        signal: AbortSignal.timeout(25000),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/ssml+xml",
+          "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+          "User-Agent": "Mozilla/5.0",
+        },
+        body: ssml,
+      });
+    } catch {
+      return { ok: false, error: "Free voice timed out." };
+    }
+    if (!res.ok) return { ok: false, error: `Free voice returned ${res.status}.` };
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (bytes.length < 128) return { ok: false, error: "Free voice returned empty audio." };
+    chunks.push(bytes);
+  }
+  if (!chunks.length) return { ok: false, error: "Nothing to read." };
+  return { ok: true, audioBase64: Buffer.concat(chunks).toString("base64"), mimeType: "audio/mpeg" };
+}
 
 function pcm16ToWav(pcm: Buffer, sampleRate: number): Buffer {
   const header = Buffer.alloc(44);
@@ -440,13 +599,24 @@ function parseDirection(raw: string): Direction | null {
     const character = item as Record<string, unknown>;
     const name = asText(character.name, 40);
     if (!name) continue;
-    cast.push({
+    const look = asText(character.look, 280) || asText(character.vessel, 280);
+    const rowCast: Character = {
       id: asText(character.id, 32) || name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
       name,
       soul: asText(character.soul, 280) || "Identity stays with this name.",
       vessel: asText(character.vessel, 280) || "Body not stated.",
-      look: asText(character.look, 280) || asText(character.vessel, 280),
-    });
+      look,
+      face: asText(character.face, 180),
+      hair: asText(character.hair, 180),
+      age: asText(character.age, 40),
+      scars: asText(character.scars, 180),
+      eyes: asText(character.eyes, 80),
+      body: asText(character.body, 180),
+      outfit: asText(character.outfit, 180),
+    };
+    rowCast.look = composeLook(rowCast) || look;
+    rowCast.vessel = rowCast.outfit || rowCast.vessel;
+    cast.push(rowCast);
   }
   const panels: Scene[] = [];
   for (const [index, item] of scenes.entries()) {
@@ -462,9 +632,9 @@ function parseDirection(raw: string): Direction | null {
       speaker: asText(scene.speaker, 40),
       sfx: asText(scene.sfx, 16).toUpperCase(),
       state: asText(scene.state, 160),
-      imagePrompt:
-        asText(scene.imagePrompt, 500) || `Vertical illustrated panel, no text, no letters. ${caption} ${dialogue}`,
+      imagePrompt: "",
       imageUrl: null,
+      promptLocked: false,
     });
   }
   if (!panels.length) return null;
@@ -557,7 +727,10 @@ function looksLikePaywall(text: string): boolean {
   return /sign in|log in|login|subscribe|paywall|chapter locked|purchase to read|members only/.test(text.toLowerCase());
 }
 
-async function readHtml(url: URL): Promise<{ ok: true; html: string; finalUrl: URL } | { ok: false; code: string; error: string }> {
+async function readHtml(
+  url: URL,
+  cookie = "",
+): Promise<{ ok: true; html: string; finalUrl: URL } | { ok: false; code: string; error: string }> {
   const agents = [PAGE_HEADERS["User-Agent"], DESKTOP_UA, GOOGLEBOT_UA];
   let last: { ok: false; code: string; error: string } = { ok: false, code: "FETCH_FAILED", error: "The page did not answer." };
   for (const agent of agents) {
@@ -571,7 +744,7 @@ async function readHtml(url: URL): Promise<{ ok: true; html: string; finalUrl: U
         res = await fetch(current, {
           redirect: "manual",
           signal: AbortSignal.timeout(15000),
-          headers: { ...PAGE_HEADERS, "User-Agent": agent },
+          headers: { ...PAGE_HEADERS, "User-Agent": agent, ...(cookie ? { Cookie: cookie } : {}) },
         });
       } catch {
         last = { ok: false, code: "FETCH_FAILED", error: "The page did not answer." };
@@ -670,9 +843,19 @@ async function readViaReader(pageUrl: string): Promise<{ title: string; text: st
   return { title: extracted.title || titleLine?.[1]?.trim() || "", text };
 }
 
+function safeCookie(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const clean = value.replace(/[\r\n]/g, "").trim();
+  if (!clean) return "";
+  if (clean.length > 4000) throw new Error("That cookie is too long.");
+  if (!/^[\x20-\x7E]+$/.test(clean)) throw new Error("The cookie has characters this fetch will not send.");
+  return clean;
+}
+
 export const fetchSource = createServerFn({ method: "POST" })
   .validator((input: unknown) => {
-    const url = typeof (input as { url?: unknown })?.url === "string" ? (input as { url: string }).url.trim() : "";
+    const row = input as { url?: unknown; cookie?: unknown };
+    const url = typeof row?.url === "string" ? row.url.trim() : "";
     let parsed: URL;
     try {
       parsed = new URL(url);
@@ -680,62 +863,75 @@ export const fetchSource = createServerFn({ method: "POST" })
       throw new Error("That link is not a URL.");
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("Only http and https links.");
-    return { url: parsed.toString() };
+    return { url: parsed.toString(), cookie: safeCookie(row.cookie) };
   })
-  .handler(async ({ data }): Promise<{ ok: true; title: string; text: string } | { ok: false; code: string; error: string }> => {
+  .handler(async ({ data }): Promise<
+    | { ok: true; title: string; text: string; panels: { src: string; text: string; bubble: string; aside: string }[] }
+    | { ok: false; code: string; error: string }
+  > => {
     const page = new URL(data.url);
     const blocked = await assertPublic(page.hostname);
     if (blocked) return { ok: false, code: "SSRF_BLOCKED", error: blocked };
 
     const wtr = parseWtrChapterUrl(data.url);
-    if (wtr) {
+    if (wtr && !data.cookie) {
       try {
         const chapter = await fetchWtrChapter(wtr);
         if (chapter && chapter.text.length >= 80) {
           const text = sanitizeNovelText(chapter.text);
           const title = sanitizeNovelText(chapter.title);
-          if (text.length >= 80) return { ok: true, title: title || page.hostname, text };
+          if (text.length >= 80) return { ok: true, title: title || page.hostname, text, panels: [] };
         }
       } catch {
         /* fall through to a normal page read */
       }
     }
 
-    const direct = await readHtml(page);
+    const direct = await readHtml(page, data.cookie);
     if (direct.ok) {
       const challenge = looksLikeChallenge(direct.html);
       const extracted = htmlToText(direct.html);
-      if (!challenge && extracted.text.length >= 80 && !looksLikePaywall(extracted.text)) {
-        return { ok: true, title: extracted.title || direct.finalUrl.hostname, text: extracted.text };
+      const panels = extractPanels(direct.html, direct.finalUrl.toString());
+      if (!challenge && (extracted.text.length >= 80 || panels.length > 0) && !looksLikePaywall(extracted.text)) {
+        return {
+          ok: true,
+          title: extracted.title || direct.finalUrl.hostname,
+          text: extracted.text,
+          panels,
+        };
       }
     } else if (direct.code === "SSRF_BLOCKED") {
       return direct;
     }
 
-    const fallback = await readViaReader(data.url);
+    const fallback = data.cookie ? null : await readViaReader(data.url);
     if (fallback) {
-      return { ok: true, title: fallback.title || page.hostname, text: fallback.text };
+      return { ok: true, title: fallback.title || page.hostname, text: fallback.text, panels: [] };
     }
 
     if (direct.ok && looksLikeChallenge(direct.html)) {
       return {
         ok: false,
         code: "FETCH_BLOCKED",
-        error: "The site blocked the fetch (Cloudflare or a script-only page). Paste the chapter. This is not a paywall.",
+        error: "The site blocked the fetch (Cloudflare or a script-only page). Paste the chapter, or paste your browser cookie for this site. This is not a paywall.",
       };
     }
     if (!direct.ok && direct.code === "FETCH_BLOCKED") {
       return {
         ok: false,
         code: "FETCH_BLOCKED",
-        error: "The site blocked the fetch. Paste the chapter text. A block is not treated as a paywall.",
+        error: data.cookie
+          ? "The site still blocked the fetch with that cookie. Paste the chapter text."
+          : "The site blocked the fetch. Paste a cookie from a tab where you are logged in, or paste the chapter text.",
       };
     }
     if (!direct.ok && direct.code === "SOURCE_ACCESS_DENIED") {
       return {
         ok: false,
         code: "SOURCE_ACCESS_DENIED",
-        error: "This page wants a login. Paste the chapter text instead. A block is not treated as a paywall.",
+        error: data.cookie
+          ? "That cookie was rejected. Paste the chapter text. Passwords are not accepted."
+          : "This page wants a login. Paste your browser cookie for this site, or paste the chapter text. Passwords are not accepted.",
       };
     }
     if (!direct.ok) return direct;
@@ -953,7 +1149,8 @@ export const uploadYoutube = createServerFn({ method: "POST" })
     const description = typeof row.description === "string" ? row.description.slice(0, 5000) : "";
     const tags = Array.isArray(row.tags) ? row.tags.filter((tag) => typeof tag === "string").slice(0, 15) : [];
     const privacy = row.privacy === "public" || row.privacy === "unlisted" || row.privacy === "private" ? row.privacy : "private";
-    return { href: target.toString(), hostname: target.hostname, token, accessToken, jobId, title, description, tags, privacy };
+    const language = row.language === "hi" ? "hi" : "en";
+    return { href: target.toString(), hostname: target.hostname, token, accessToken, jobId, title, description, tags, privacy, language };
   })
   .handler(async ({ data }): Promise<{ ok: true; watchUrl: string } | { ok: false; error: string }> => {
     const blocked = await assertPublic(data.hostname);
@@ -976,6 +1173,7 @@ export const uploadYoutube = createServerFn({ method: "POST" })
           description: data.description,
           tags: data.tags,
           privacy: data.privacy,
+          language: data.language,
         }),
       });
     } catch {
@@ -1023,3 +1221,319 @@ export async function fetchWorkerPreview(input: unknown): Promise<{ ok: true; by
   if (bytes.byteLength < 64 || bytes.byteLength > 12_000_000) return { ok: false, error: "That preview was empty or too large." };
   return { ok: true, bytes, contentType: "video/mp4" };
 }
+
+export const translateLines = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const row = input as { target?: unknown; lines?: unknown };
+    const target = row.target === "hi" ? "hi" : row.target === "en" ? "en" : "";
+    if (!target) throw new Error("Pick English or Hindi.");
+    if (!Array.isArray(row.lines) || row.lines.length === 0) throw new Error("No lines to translate.");
+    if (row.lines.length > 40) throw new Error("Translate at most 40 lines at a time.");
+    const lines = row.lines.map((item) => {
+      const line = item as { id?: unknown; caption?: unknown; dialogue?: unknown };
+      const id = typeof line.id === "string" ? line.id.slice(0, 40) : "";
+      if (!id) throw new Error("A line is missing its id.");
+      return {
+        id,
+        caption: typeof line.caption === "string" ? line.caption.slice(0, 400) : "",
+        dialogue: typeof line.dialogue === "string" ? line.dialogue.slice(0, 400) : "",
+      };
+    });
+    return { target, lines, session: readSession({ ...(input as object), language: target }) };
+  })
+  .handler(async ({ data }): Promise<
+    | { ok: true; lines: { id: string; caption: string; dialogue: string }[]; narration: string; seo: { title: string; description: string; tags: string[]; hashtags: string } }
+    | { ok: false; error: string }
+  > => {
+    const system = [
+      `Translate every string into ${data.target === "hi" ? "Hindi in Devanagari" : "English"}.`,
+      "Return JSON only: {lines:[{id,caption,dialogue}], narration, seo:{title,description,tags,hashtags}}.",
+      "Keep each id exactly. Do not add panels. Do not write image prompts. Do not mention pictures.",
+    ].join(" ");
+    const result = await callActiveAI(data.session, system, JSON.stringify({ lines: data.lines }));
+    if (!result.ok) return { ok: false, error: `${result.error} Pictures were not touched.` };
+    const start = result.text.indexOf("{");
+    const end = result.text.lastIndexOf("}");
+    if (start < 0 || end <= start) return { ok: false, error: "The translator did not return a script. Pictures were not touched." };
+    let parsed: {
+      lines?: { id?: unknown; caption?: unknown; dialogue?: unknown }[];
+      narration?: unknown;
+      seo?: { title?: unknown; description?: unknown; tags?: unknown; hashtags?: unknown };
+    };
+    try {
+      parsed = JSON.parse(result.text.slice(start, end + 1)) as typeof parsed;
+    } catch {
+      return { ok: false, error: "The translator returned a script this studio could not read. Pictures were not touched." };
+    }
+    const wanted = new Set(data.lines.map((line) => line.id));
+    const lines = (parsed.lines ?? [])
+      .map((line) => ({
+        id: typeof line.id === "string" ? line.id : "",
+        caption: typeof line.caption === "string" ? line.caption.slice(0, 400) : "",
+        dialogue: typeof line.dialogue === "string" ? line.dialogue.slice(0, 400) : "",
+      }))
+      .filter((line) => wanted.has(line.id));
+    if (!lines.length) return { ok: false, error: "The translator dropped the lines. Pictures were not touched." };
+    const seo = parsed.seo ?? {};
+    const tags = Array.isArray(seo.tags) ? seo.tags.filter((tag) => typeof tag === "string").slice(0, 12) : [];
+    return {
+      ok: true,
+      lines,
+      narration: typeof parsed.narration === "string" ? parsed.narration.slice(0, 20000) : "",
+      seo: {
+        title: typeof seo.title === "string" ? seo.title.slice(0, 100) : "",
+        description: typeof seo.description === "string" ? seo.description.slice(0, 500) : "",
+        tags: tags as string[],
+        hashtags: typeof seo.hashtags === "string" ? seo.hashtags.slice(0, 200) : "",
+      },
+    };
+  });
+
+export const chatTurn = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const row = input as { message?: unknown; context?: unknown };
+    const message = typeof row.message === "string" ? row.message.trim() : "";
+    if (message.length < 1) throw new Error("Type a message.");
+    if (message.length > 2000) throw new Error("That message is too long.");
+    const context = typeof row.context === "string" ? row.context.slice(0, 4000) : "";
+    return { message, context, session: readSession(input) };
+  })
+  .handler(async ({ data }): Promise<{ ok: true; reply: string; action: StudioAction | null } | { ok: false; error: string }> => {
+    const system = [
+      "You are the assistant inside a manhua explanation studio.",
+      "Answer in the same language the user wrote.",
+      "If they ask to change English/Hindi voiceover, tell them Re-voice only changes the spoken script, audio, captions, and YouTube text. It does not redraw pictures.",
+      "Do not claim you generated an image unless the user already said a panel was painted.",
+      "When the user corrects one character's look, end with a single line: ACTION {\"type\":\"look\",\"name\":\"Exact Name\",\"face\":\"\",\"hair\":\"\",\"age\":\"\",\"scars\":\"\",\"eyes\":\"\",\"body\":\"\",\"outfit\":\"\",\"chapter\":0}",
+      "Include only the fields they changed. chapter is 0 unless they named a chapter for an outfit change.",
+      "When the user corrects one spoken line, end with: ACTION {\"type\":\"line\",\"id\":\"s1\",\"text\":\"the new spoken line only\"}",
+      "Use the beat id from the project context. If they are only asking a question, do not add an ACTION line.",
+    ].join(" ");
+    const result = await callActiveAI(data.session, system, data.context ? `Project:\n${data.context}\n\nUser:\n${data.message}` : data.message);
+    if (!result.ok) return result;
+    const parsed = parseStudioAction(result.text.trim().slice(0, 4000));
+    return { ok: true, reply: parsed.reply || result.text.trim().slice(0, 4000), action: parsed.action };
+  });
+
+async function imageBytes(url: string): Promise<{ mime: string; data: string } | null> {
+  if (url.startsWith("data:")) {
+    const match = url.match(/^data:([^;,]+);base64,([a-z0-9+/=\s]+)$/i);
+    if (!match?.[1] || !match[2]) return null;
+    if (match[2].length > 5_000_000) return null;
+    return { mime: match[1], data: match[2].replace(/\s/g, "") };
+  }
+  if (!/^https:\/\//i.test(url)) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  const blocked = await assertPublic(parsed.hostname);
+  if (blocked) return null;
+  let res: Response;
+  try {
+    res = await fetch(parsed, { redirect: "follow", signal: AbortSignal.timeout(20000) });
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length < 64 || buf.length > 4_000_000) return null;
+  const mime = (res.headers.get("content-type") || "image/jpeg").split(";")[0] || "image/jpeg";
+  if (!mime.startsWith("image/")) return null;
+  return { mime, data: buf.toString("base64") };
+}
+
+export const checkPanel = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const row = input as { prompt?: unknown; imageUrl?: unknown };
+    const prompt = typeof row.prompt === "string" ? row.prompt.trim() : "";
+    const imageUrl = typeof row.imageUrl === "string" ? row.imageUrl.trim() : "";
+    if (prompt.length < 8 || !imageUrl) throw new Error("Nothing to check.");
+    return { prompt: prompt.slice(0, 700), imageUrl: imageUrl.slice(0, 1_200_000), session: readSession(input) };
+  })
+  .handler(async ({ data }): Promise<{ ok: true; match: "yes" | "no" | "skipped"; note: string } | { ok: false; error: string }> => {
+    const image = await imageBytes(data.imageUrl);
+    const workerChecker = Boolean(data.session.workerUrl.trim()) && data.session.duty !== "key";
+    const geminiChecker = data.session.provider === "gemini" && Boolean(data.session.apiKey) && data.session.duty !== "worker";
+    if (workerChecker) {
+      const result = await workerPost("/api/v1/check", data.session.workerUrl, data.session.workerToken, {
+        prompt: data.prompt,
+        imageUrl: data.imageUrl.startsWith("data:") ? "" : data.imageUrl.slice(0, 2000),
+        imageBase64: image?.data || "",
+      });
+      if (result.ok && result.json && typeof result.json === "object") {
+        const row = result.json as Record<string, unknown>;
+        const match = row.match === false || row.match === "no" ? "no" : row.match === true || row.match === "yes" ? "yes" : "skipped";
+        const note = typeof row.note === "string" ? row.note.slice(0, 240) : "";
+        if (match !== "skipped") return { ok: true, match, note };
+      }
+    }
+    if (geminiChecker) {
+      if (!image) return { ok: true, match: "skipped", note: "Checker could not read the file. Picture kept." };
+      let res: Response;
+      try {
+        res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${studioConfig.geminiModel}:generateContent`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-goog-api-key": data.session.apiKey },
+            signal: AbortSignal.timeout(40000),
+            body: JSON.stringify({
+              contents: [
+                {
+                  role: "user",
+                  parts: [
+                    {
+                      text: `Compare the image to this manhua prompt. Reply JSON only: {"match":true|false,"note":"one sentence"}. Fail the match if the face, hair, outfit, or scene is clearly wrong. Prompt: ${data.prompt}`,
+                    },
+                    { inlineData: { mimeType: image.mime, data: image.data } },
+                  ],
+                },
+              ],
+            }),
+          },
+        );
+      } catch {
+        return { ok: true, match: "skipped", note: "Checker did not answer. Picture kept." };
+      }
+      if (!res.ok) return { ok: true, match: "skipped", note: "Checker could not look. Picture kept." };
+      try {
+        const body = JSON.parse(await res.text()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+        const text = body.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") ?? "";
+        const start = text.indexOf("{");
+        const end = text.lastIndexOf("}");
+        if (start < 0 || end <= start) return { ok: true, match: "skipped", note: "Checker reply was unclear. Picture kept." };
+        const verdict = JSON.parse(text.slice(start, end + 1)) as { match?: unknown; note?: unknown };
+        const note = typeof verdict.note === "string" ? verdict.note.slice(0, 240) : "";
+        return { ok: true, match: verdict.match === false ? "no" : "yes", note };
+      } catch {
+        return { ok: true, match: "skipped", note: "Checker reply was unclear. Picture kept." };
+      }
+    }
+    return { ok: true, match: "skipped", note: "No checker connected. Picture kept. Connect the worker, or a Gemini key, to verify the face." };
+  });
+
+type PulledPage = {
+  url: string;
+  ok: boolean;
+  title: string;
+  text: string;
+  error: string;
+  panels: { src: string; text: string; bubble: string; aside: string }[];
+};
+
+function asPages(value: unknown): PulledPage[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 220).map((item) => {
+    const row = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+    const panels = Array.isArray(row.panels)
+      ? row.panels.slice(0, 80).map((panel) => {
+          const box = panel && typeof panel === "object" ? (panel as Record<string, unknown>) : {};
+          const src = typeof box.src === "string" ? box.src.slice(0, 500) : "";
+          const bubble = typeof box.bubble === "string" ? box.bubble.slice(0, 400) : "";
+          const aside = typeof box.aside === "string" ? box.aside.slice(0, 400) : "";
+          const text = typeof box.text === "string" ? box.text.slice(0, 500) : [bubble, aside].filter(Boolean).join(" ");
+          return { src, text, bubble, aside };
+        })
+      : [];
+    return {
+      url: typeof row.url === "string" ? row.url.slice(0, 500) : "",
+      ok: row.ok !== false,
+      title: typeof row.title === "string" ? row.title.slice(0, 180) : "",
+      text: typeof row.text === "string" ? row.text.slice(0, 20000) : "",
+      error: typeof row.error === "string" ? row.error.slice(0, 200) : "",
+      panels: panels.filter((panel) => panel.src.startsWith("http")),
+    };
+  });
+}
+
+export const startWorkerFetch = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const row = input as { urls?: unknown; cookie?: unknown };
+    if (!Array.isArray(row.urls) || row.urls.length === 0) throw new Error("No chapter links to send.");
+    if (row.urls.length > 180) throw new Error("That range is too long for one worker fetch. Split it.");
+    const urls = row.urls.map((item) => {
+      if (typeof item !== "string") throw new Error("A chapter link is not a URL.");
+      let parsed: URL;
+      try {
+        parsed = new URL(item.trim());
+      } catch {
+        throw new Error("A chapter link is not a URL.");
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("Only http and https links.");
+      return parsed.toString();
+    });
+    return { urls, cookie: safeCookie(row.cookie), session: readSession(input) };
+  })
+  .handler(async ({ data }): Promise<{ ok: true; jobId: string } | { ok: false; error: string }> => {
+    if (!data.session.workerUrl.trim()) return { ok: false, error: "Add the worker URL first. Long ranges are fetched there, not on this phone." };
+    for (const url of data.urls) {
+      const blocked = await assertPublic(new URL(url).hostname);
+      if (blocked) return { ok: false, error: blocked };
+    }
+    const result = await workerPost("/api/v1/fetch", data.session.workerUrl, data.session.workerToken, {
+      urls: data.urls,
+      cookie: data.cookie,
+    });
+    if (!result.ok) return result;
+    const row = result.json && typeof result.json === "object" ? (result.json as Record<string, unknown>) : {};
+    const jobId = typeof row.id === "string" ? row.id : "";
+    if (!/^[A-Za-z0-9]{6,32}$/.test(jobId)) return { ok: false, error: "The worker did not start the fetch." };
+    return { ok: true, jobId };
+  });
+
+export const workerFetchStatus = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const row = input as { jobId?: unknown };
+    const jobId = typeof row.jobId === "string" ? row.jobId.trim() : "";
+    if (!/^[A-Za-z0-9]{6,32}$/.test(jobId)) throw new Error("That fetch id is not valid.");
+    return { jobId, session: readSession(input) };
+  })
+  .handler(async ({ data }): Promise<{ ok: true; status: string; label: string; progress: number; pages: PulledPage[] } | { ok: false; error: string }> => {
+    const result = await workerJson(`/api/v1/fetch/${data.jobId}`, data.session.workerUrl, data.session.workerToken);
+    if (!result.ok) return result;
+    const row = result.json && typeof result.json === "object" ? (result.json as Record<string, unknown>) : {};
+    const progress = typeof row.progress === "number" ? Math.max(0, Math.min(100, Math.round(row.progress))) : 0;
+    return {
+      ok: true,
+      status: typeof row.status === "string" ? row.status : "running",
+      label: typeof row.label === "string" ? row.label.slice(0, 80) : "",
+      progress,
+      pages: asPages(row.pages),
+    };
+  });
+
+export const readPanelText = createServerFn({ method: "POST" })
+  .validator((input: unknown) => {
+    const row = input as { images?: unknown };
+    if (!Array.isArray(row.images) || row.images.length === 0) throw new Error("No panels to read.");
+    if (row.images.length > 8) throw new Error("Read at most 8 panels at a time.");
+    const images = row.images.map((item) => {
+      const box = item as { id?: unknown; url?: unknown };
+      const id = typeof box.id === "string" ? box.id.slice(0, 40) : "";
+      const url = typeof box.url === "string" ? box.url.trim() : "";
+      if (!id || !/^https?:\/\//i.test(url)) throw new Error("A panel image is missing its link.");
+      return { id, url: url.slice(0, 500) };
+    });
+    return { images, session: readSession(input) };
+  })
+  .handler(async ({ data }): Promise<{ ok: true; panels: { id: string; bubble: string; aside: string }[] } | { ok: false; error: string }> => {
+    if (!data.session.workerUrl.trim()) return { ok: false, error: "Bubble reading needs the worker." };
+    const result = await workerPost("/api/v1/ocr", data.session.workerUrl, data.session.workerToken, { images: data.images });
+    if (!result.ok) return result;
+    const row = result.json && typeof result.json === "object" ? (result.json as Record<string, unknown>) : {};
+    const panels = Array.isArray(row.panels)
+      ? row.panels.map((item) => {
+          const box = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+          return {
+            id: typeof box.id === "string" ? box.id.slice(0, 40) : "",
+            bubble: typeof box.bubble === "string" ? box.bubble.slice(0, 400) : "",
+            aside: typeof box.aside === "string" ? box.aside.slice(0, 400) : "",
+          };
+        })
+      : [];
+    return { ok: true, panels };
+  });
+

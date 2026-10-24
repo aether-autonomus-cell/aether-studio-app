@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { htmlToText, sanitizeNovelText } from "./extract.ts";
+import { extractPanels, htmlToText, sanitizeNovelText } from "./extract.ts";
 
 test("page text is not clipped at 8000 characters", () => {
   const body = `Rain ${"lantern ".repeat(1600)}`;
@@ -55,6 +55,14 @@ test("short site labels on their own lines are dropped", () => {
   assert.equal(clean, "The spear stayed lowered.");
 });
 
+test("a panel keeps bubble text apart from the line near the face", () => {
+  const html = `<article><img alt="Ren: The debt stays." src="https://cdn.example.com/p1.jpg"><p>Rain on the stone bridge while he refuses the water.</p><img src="https://cdn.example.com/logo.png"></article>`;
+  const panels = extractPanels(html, "https://example.com/ch");
+  assert.equal(panels.length, 1);
+  assert.match(panels[0]!.bubble, /debt stays/);
+  assert.match(panels[0]!.aside, /stone bridge/);
+  assert.match(panels[0]!.text, /debt stays/);
+});
 test("chapter html drops the site title chrome", () => {
   const html = `<html><title>Chapter 586 - Debt - WTR-LAB</title><nav>WTR-LAB Ch. 586/616</nav><article><p>95.1% Web</p><p>#586Chapter The spear stayed lowered while the gate opened.</p></article></html>`;
   const { title, text } = htmlToText(html);

@@ -33,6 +33,10 @@ export const packetSceneSchema = z.object({
   state: z.string(),
   bubble: bubbleSchema,
   image_url: z.string().max(1_200_000).optional(),
+  /** Language-neutral picture hold from the first assemble. A longer line may extend it. */
+  hold_sec: z.number().positive().max(180).optional(),
+  /** Approved face file. The worker may use it. A language switch does not replace it. */
+  reference: z.string().max(500_000).optional(),
   tiles: z.array(tileSchema).min(1),
 });
 
@@ -67,8 +71,12 @@ export const jobPacketV2Schema = z.object({
   aspect: z.enum(["16:9", "9:16"]).default("16:9"),
   local_model: z.enum(["gguf", "airllm", "fast"]).default("gguf"),
   hook: z.string().default(""),
+  /** assemble draws missing art. revoice keeps every picture and only replaces audio and captions. */
+  pass: z.enum(["assemble", "revoice"]).default("assemble"),
   chapters: z.array(chapterSchema).min(1),
   seo: seoSchema,
+  /** Hugging Face repo for the Colab checkpoint. Empty keeps the cell default. */
+  image_repo: z.string().max(200).optional(),
   note: z.string(),
 });
 

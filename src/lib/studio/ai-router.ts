@@ -15,6 +15,8 @@ export type CloudProvider = (typeof CLOUD_PROVIDERS)[number];
 export type LocalMode = "gguf" | "airllm" | "fast";
 export type ExplainLanguage = "hi" | "en";
 
+export type Duty = "split" | "worker" | "key";
+
 export type AiSession = {
   provider: CloudProvider;
   model: string;
@@ -24,6 +26,8 @@ export type AiSession = {
   workerToken: string;
   localModel: LocalMode;
   language: ExplainLanguage;
+  /** split: key writes and checks, worker paints, speaks, and cuts. */
+  duty: Duty;
 };
 
 export type ModelOption = { id: string; label: string };
@@ -139,6 +143,10 @@ function clipKey(value: string, max: number): string {
   return key;
 }
 
+function dutyOf(value: unknown): Duty {
+  return value === "worker" || value === "key" ? value : "split";
+}
+
 export function readSession(input: unknown): AiSession {
   const row = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
   const rawProvider = typeof row.provider === "string" ? row.provider : "";
@@ -155,8 +163,9 @@ export function readSession(input: unknown): AiSession {
   if (workerToken.length > 500) throw new Error("That token is too long.");
   const localModel = typeof row.localModel === "string" && isLocalMode(row.localModel) ? row.localModel : "gguf";
   const language: ExplainLanguage = row.language === "hi" ? "hi" : "en";
+  const duty = dutyOf(row.duty);
   if (rawProvider === "worker") {
-    return { provider, model: model || defaultModel(provider), apiKey: "", customBaseUrl, workerUrl, workerToken, localModel, language };
+    return { provider, model: model || defaultModel(provider), apiKey: "", customBaseUrl, workerUrl, workerToken, localModel, language, duty };
   }
   return {
     provider,
@@ -167,6 +176,7 @@ export function readSession(input: unknown): AiSession {
     workerToken,
     localModel,
     language,
+    duty,
   };
 }
 
@@ -213,6 +223,29 @@ export function shouldFailover(status: number, body: string): boolean {
   return /quota|rate limit|resource exhausted|insufficient|billing|timeout|too many requests/i.test(body);
 }
 
+/** Default when both are connected: the key writes. The user can flip this in Settings. */
+export function textVia(duty: Duty, hasKey: boolean, hasWorker: boolean): "key" | "worker" | "none" {
+  if (duty === "worker") {
+    if (hasWorker) return "worker";
+    if (hasKey) return "key";
+    return "none";
+  }
+  if (duty === "key") {
+    if (hasKey) return "key";
+    if (hasWorker) return "worker";
+    return "none";
+  }
+  if (hasKey) return "key";
+  if (hasWorker) return "worker";
+  return "none";
+}
+
+/** Images, voice, and ffmpeg stay on the worker unless the user forces key-only. */
+export function imageVia(duty: Duty, hasWorker: boolean): "worker" | "fallback" {
+  if (hasWorker && duty !== "key") return "worker";
+  return "fallback";
+}
+
 export function textFromModel(json: unknown): string {
   if (typeof json === "string") return json;
   if (!json || typeof json !== "object") return "";
@@ -241,12 +274,14 @@ export function directorSystem(language: ExplainLanguage): string {
     "You direct a professional manhua explanation video. Return only JSON.",
     `Every title, hook, logline, caption, dialogue, narration, soul, vessel, and seo string must be ${voice}`,
     "If the source is Chinese or any other language, translate it completely into that language. Do not leave Chinese characters in the JSON values.",
-    "Keys: title, hook, logline, timeline (string[]), characters ([{id,name,soul,vessel,look}]), scenes ([{caption,dialogue,speaker,sfx,state,imagePrompt}]), narration, seo ({title,description,tags}).",
+    "Keys: title, hook, logline, timeline (string[]), characters ([{id,name,soul,vessel,look,face,hair,age,scars,eyes,body,outfit}]), scenes ([{caption,dialogue,speaker,sfx,state}]), narration, seo ({title,description,tags,hashtags}).",
     "hook is a one or two sentence YouTube cold open.",
     "narration is the full voiceover: hook first, then the chapter in order, third person, no speaker labels, no Chinese.",
     "soul is identity. vessel is the body they wear in this chapter, with visual detail.",
+    "Put face, hair, age, scars, eyes, body, and outfit on each character when the source says them. Outfit changes belong on the character, with the chapter number in the look text.",
     "Unlimited scenes, one per beat. Never cap at 4 or 6. Do not drop the ending.",
-    "imagePrompt is a vertical manhua panel with no text, letters, logos, or speech bubbles.",
+    "Do not write imagePrompt in this pass. Picture prompts are written later, one beat at a time, in English.",
+    "A language change must never invent a new look. If a CHARACTER LOCK is included, keep that look. Do not rewrite it.",
     "sfx is one short word or empty. No markdown.",
   ].join(" ");
 }

@@ -7,6 +7,9 @@ const PATHS = [
   "/api/v1/llm",
   "/api/v1/youtube-upload",
   "/api/v1/preview.mp4",
+  "/api/v1/check",
+  "/api/v1/fetch",
+  "/api/v1/ocr",
 ] as const;
 
 export type WorkerPath = (typeof PATHS)[number];

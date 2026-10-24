@@ -1,12 +1,24 @@
 import { sanitizeNovelText } from "./extract.ts";
 import { DEFAULT_NEGATIVE, detectLanguage, jobPacketV2Schema, voiceFor, type JobPacketV2, type PacketChapter, type PacketScene } from "./schema.ts";
 
+export type OutfitChange = { chapter: number; outfit: string };
+
 export type Character = {
   id: string;
   name: string;
   soul: string;
   vessel: string;
   look: string;
+  face?: string;
+  hair?: string;
+  age?: string;
+  scars?: string;
+  eyes?: string;
+  body?: string;
+  outfit?: string;
+  outfits?: OutfitChange[];
+  /** First accepted panel that shows this face. A language switch must not clear it. */
+  faceUrl?: string;
 };
 
 export type Scene = {
@@ -18,6 +30,25 @@ export type Scene = {
   state: string;
   imagePrompt: string;
   imageUrl: string | null;
+  /** Spoken script kept per language. A language switch reads these and must not redraw. */
+  lineEn?: string;
+  lineHi?: string;
+  captionEn?: string;
+  captionHi?: string;
+  dialogueEn?: string;
+  dialogueHi?: string;
+  checkNote?: string;
+  retries?: number;
+  /** Source panel from a picture manhua. Paint must skip it. */
+  locked?: boolean;
+  /** True after the writer has saved an English prompt for this beat alone. */
+  promptLocked?: boolean;
+  /** Worker URLs. Phone memory is not the copy that survives a refresh. */
+  voiceEn?: string;
+  voiceHi?: string;
+  /** Picture hold saved once. A longer line may extend it. */
+  holdSec?: number;
+  chapter?: number;
 };
 
 /** Spoken line for the bubble. Drops a leading "Name:" so the speaker chip is not printed twice. */
@@ -38,6 +69,7 @@ export type Seo = {
   tags: string[];
   /** Preview only. Omitted from job packet v2. */
   privacy?: YoutubePrivacy;
+  hashtags?: string;
 };
 
 export function youtubePrivacy(value: unknown): YoutubePrivacy {
@@ -70,6 +102,16 @@ export type Project = {
   hook?: string;
   aspect?: "16:9" | "9:16";
   localModel?: "gguf" | "airllm" | "fast";
+  narrationEn?: string;
+  narrationHi?: string;
+  seoEn?: Seo;
+  seoHi?: Seo;
+  /** Chapters read only to lock looks. Never turned into panels. */
+  bible?: string;
+  readyEn?: boolean;
+  readyHi?: boolean;
+  /** Hugging Face checkpoint the worker should load. Empty uses the cell default. */
+  imageRepo?: string;
 };
 
 export const SAMPLE_TEXT = `The Lantern Debt
@@ -126,6 +168,13 @@ export const SAMPLE: Project = {
       state: "Torn saffron robe, night rain, scar visible",
       imagePrompt: `Vertical manhua panel, no text. Night rain on a stone bridge, paper lanterns. ${LOOK}. He will not look at the water.`,
       imageUrl: "/panels/01-bridge.jpg",
+      captionEn: "Rain argued with the lanterns. Ren would not look at the water.",
+      dialogueEn: "The pendant cracked because I paid the wrong debt.",
+      captionHi: "बारिश लालटेन से झगड़ रही थी। रेन पानी की तरफ़ नहीं देख रहा था।",
+      dialogueHi: "पेंडेंट इसलिए टूटा क्योंकि मैंने गलत क़र्ज़ चुकाया।",
+      lineEn: "Rain argued with the lanterns. Ren would not look at the water. The pendant cracked because I paid the wrong debt.",
+      lineHi: "बारिश लालटेन से झगड़ रही थी। रेन पानी की तरफ़ नहीं देख रहा था। पेंडेंट इसलिए टूटा क्योंकि मैंने गलत क़र्ज़ चुकाया।",
+      locked: true,
     },
     {
       id: "s2",
@@ -136,6 +185,13 @@ export const SAMPLE: Project = {
       state: "Blood on the thumb, pale-green glow, wet hair",
       imagePrompt: `Vertical manhua close-up, no text. ${LOOK}, cupping a cracked glowing jade pendant, blood on the thumb, rain.`,
       imageUrl: "/panels/02-jade.jpg",
+      captionEn: "The cracked jade remembered a name he had tried to forget.",
+      dialogueEn: "",
+      captionHi: "टूटी हुई जेड ने वह नाम याद किया जिसे वह भुलाना चाहता था।",
+      dialogueHi: "",
+      lineEn: "The cracked jade remembered a name he had tried to forget.",
+      lineHi: "टूटी हुई जेड ने वह नाम याद किया जिसे वह भुलाना चाहता था।",
+      locked: true,
     },
     {
       id: "s3",
@@ -147,6 +203,13 @@ export const SAMPLE: Project = {
       imagePrompt:
         "Vertical manhua panel, no text. Misty cedar forest at dawn. Woman with silver-white hair in a high knot, black armor, long spear, severe calm face.",
       imageUrl: "/panels/03-spear.jpg",
+      captionEn: "Across the cedar mist, Shao waited. Her calm made the fog step aside.",
+      dialogueEn: "Your soul can cross. That body cannot.",
+      captionHi: "देवदार के कोहरे के पार शाओ इंतज़ार कर रही थी। उसके सुकून से कोहरा हट गया।",
+      dialogueHi: "तुम्हारी रूह पार हो सकती है। यह शरीर नहीं।",
+      lineEn: "Across the cedar mist, Shao waited. Her calm made the fog step aside. Your soul can cross. That body cannot.",
+      lineHi: "देवदार के कोहरे के पार शाओ इंतज़ार कर रही थी। उसके सुकून से कोहरा हट गया। तुम्हारी रूह पार हो सकती है। यह शरीर नहीं।",
+      locked: true,
     },
     {
       id: "s4",
@@ -157,16 +220,42 @@ export const SAMPLE: Project = {
       state: "Robe tearing in the wind, spear lowered, lightning over the gate",
       imagePrompt: `Vertical manhua wide panel, no text. Dark palace gate, lightning, rain. Left: ${LOOK}. Right: silver-haired woman in black armor with a spear lowered.`,
       imageUrl: "/panels/04-gate.jpg",
+      captionEn: "Lightning opened the palace gate. Between them the debt had a face.",
+      dialogueEn: "",
+      captionHi: "बिजली ने महल का द्वार खोल दिया। उनके बीच क़र्ज़ का चेहरा था।",
+      dialogueHi: "",
+      lineEn: "Lightning opened the palace gate. Between them the debt had a face.",
+      lineHi: "बिजली ने महल का द्वार खोल दिया। उनके बीच क़र्ज़ का चेहरा था।",
+      locked: true,
     },
   ],
   narration:
     "Rain argued with the lanterns on Old Bridge. Ren would not look at the water. The pendant cracked because he paid the wrong debt. Blood threaded his thumb, and the jade remembered a name. In the cedar mist Shao waited with her spear. Your soul can cross, she said. That body cannot. Lightning opened the palace gate, and the debt finally had a face.",
+  narrationEn:
+    "Rain argued with the lanterns on Old Bridge. Ren would not look at the water. The pendant cracked because he paid the wrong debt. Blood threaded his thumb, and the jade remembered a name. In the cedar mist Shao waited with her spear. Your soul can cross, she said. That body cannot. Lightning opened the palace gate, and the debt finally had a face.",
+  narrationHi:
+    "पुराने पुल पर बारिश लालटेन से झगड़ रही थी। रेन पानी की तरफ़ नहीं देख रहा था। पेंडेंट इसलिए टूटा क्योंकि उसने गलत क़र्ज़ चुकाया। अंगूठे पर खून था, और जेड ने एक नाम याद किया। देवदार के कोहरे में शाओ भाला लेकर खड़ी थी। उसने कहा, तुम्हारी रूह पार हो सकती है। यह शरीर नहीं। बिजली ने महल का द्वार खोला, और क़र्ज़ का चेहरा सामने था।",
   seo: {
     title: "The Lantern Debt — a soul may cross, the body may not",
     description:
       "Motion comic. On a rain bridge, Ren's cracked jade calls in a debt. Shao lets the soul through and stops the body at the palace gate.",
     tags: ["motion comic", "manhua", "The Lantern Debt", "Ren", "Shao", "original story"],
+    hashtags: "#manhua #motioncomic #TheLanternDebt",
     privacy: "private",
+  },
+  seoEn: {
+    title: "The Lantern Debt — a soul may cross, the body may not",
+    description:
+      "Motion comic. On a rain bridge, Ren's cracked jade calls in a debt. Shao lets the soul through and stops the body at the palace gate.",
+    tags: ["motion comic", "manhua", "The Lantern Debt", "Ren", "Shao", "original story"],
+    hashtags: "#manhua #motioncomic #TheLanternDebt",
+  },
+  seoHi: {
+    title: "लालटेन का क़र्ज़ — रूह पार हो सकती है, शरीर नहीं",
+    description:
+      "मोशन कॉमिक। बारिश वाले पुल पर रेन की टूटी जेड एक क़र्ज़ वसूलती है। शाओ रूह को जाने देती है और शरीर को महल के द्वार पर रोक देती है।",
+    tags: ["मोशन कॉमिक", "manhua", "लालटेन का क़र्ज़", "Ren", "Shao"],
+    hashtags: "#manhua #मोशनकॉमिक #लालटेनकाकर्ज़",
   },
 };
 
@@ -385,7 +474,7 @@ export function projectFromChapters(
       characters: cut.characters,
       scenes: chapterScenes,
     });
-    for (const scene of chapterScenes) scenes.push({ ...scene, id: `c${item.index}-${scene.id}` });
+    for (const scene of chapterScenes) scenes.push({ ...scene, id: `c${item.index}-${scene.id}`, chapter: item.index });
     for (const character of cut.characters) {
       const key = character.name.trim().toLowerCase();
       if (!key || seen.has(key)) continue;
@@ -439,8 +528,18 @@ function tilesFor(scene: Scene, characters: Character[]): PacketScene["tiles"] {
   ];
 }
 
+function faceReference(scene: Scene, characters: Character[]): string | undefined {
+  const blob = `${scene.speaker}\n${scene.caption}\n${scene.dialogue}\n${scene.imagePrompt}`;
+  const named = characters.find((character) => character.faceUrl && character.name && blob.includes(character.name));
+  const only = characters.length === 1 ? characters[0] : undefined;
+  const face = named?.faceUrl || only?.faceUrl || "";
+  if (!face || face.length > 400_000) return undefined;
+  return face;
+}
+
 function scenePacket(scene: Scene, characters: Character[]): PacketScene {
   const image = scene.imageUrl && scene.imageUrl.length > 0 && scene.imageUrl.length <= 1_200_000 ? scene.imageUrl : undefined;
+  const reference = faceReference(scene, characters);
   return {
     id: scene.id,
     caption: scene.caption,
@@ -448,6 +547,8 @@ function scenePacket(scene: Scene, characters: Character[]): PacketScene {
     state: scene.state,
     bubble: { speaker: scene.speaker, text: scene.dialogue },
     ...(image ? { image_url: image } : {}),
+    ...(scene.holdSec && scene.holdSec > 0 ? { hold_sec: scene.holdSec } : {}),
+    ...(reference ? { reference } : {}),
     tiles: tilesFor(scene, characters),
   };
 }
@@ -486,7 +587,7 @@ export function projectWithAbsoluteArt(project: Project, origin: string): Projec
   };
 }
 
-export function jobPacket(project: Project): JobPacket {
+export function jobPacket(project: Project, pass: "assemble" | "revoice" = "assemble"): JobPacket {
   const language = project.language ?? detectLanguage(`${project.text}\n${project.narration}`);
   const chapters: PacketChapter[] = project.chapters?.length
     ? project.chapters.map(chapterPacket)
@@ -508,14 +609,37 @@ export function jobPacket(project: Project): JobPacket {
     aspect: project.aspect === "9:16" ? "9:16" : "16:9",
     local_model: project.localModel === "airllm" || project.localModel === "fast" ? project.localModel : "gguf",
     hook: project.hook ?? "",
+    pass,
     chapters,
     seo: {
       title: project.seo.title,
       description: project.seo.description,
       tags: project.seo.tags,
     },
+    ...(project.imageRepo?.trim() ? { image_repo: project.imageRepo.trim().slice(0, 200) } : {}),
     note: "Job packet v2. Explanation video. Do not fetch paywalled pages. Panels are prompts for the GPU render, not a static strip.",
   });
+}
+
+/** Picture holds and worker voice paths from a finished job. Does not touch prompts or images. */
+export function applyWorkerAssets(
+  project: Project,
+  timing: Record<string, number>,
+  voices: Record<string, string>,
+  language: "en" | "hi",
+): Project {
+  return {
+    ...project,
+    scenes: project.scenes.map((scene) => {
+      const hold = timing[scene.id];
+      const voice = voices[scene.id];
+      const nextHold = hold && hold > 0 ? Math.max(scene.holdSec || 0, hold) : scene.holdSec;
+      if (language === "hi") {
+        return { ...scene, ...(nextHold ? { holdSec: nextHold } : {}), ...(voice ? { voiceHi: voice } : {}) };
+      }
+      return { ...scene, ...(nextHold ? { holdSec: nextHold } : {}), ...(voice ? { voiceEn: voice } : {}) };
+    }),
+  };
 }
 
 export { FACTORY_CELL } from "./factory-cell.ts";
