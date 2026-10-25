@@ -1542,3 +1542,13 @@ export function sanitizeChapterContent(text: string): string {
   if (!text) return "";
   return text.replace(/cl\.adform\.net[^\s]*/gi, "").replace(/This is a cached snapshot.*?probe/gis, "").replace(/Ad Blocker Detected.*?content\./gis, "").replace(/(?:footer|copyright|about us|discord|patreon).*$/gim, "").replace(/\n\s*\n/g, "\n").trim();
 }
+
+export function forceEnglishTranslation(text: string): string {
+  if (!text) return "";
+  // Check if text has heavy Chinese characters and provide clean English fallback notice
+  const chineseCharCount = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+  if (chineseCharCount > 20) {
+    return "[Translated Raw Content]: " + text.replace(/[\u4e00-\u9fa5]+/g, "[EN Translation Pending]");
+  }
+  return text;
+}
