@@ -1537,3 +1537,8 @@ export const readPanelText = createServerFn({ method: "POST" })
     return { ok: true, panels };
   });
 
+
+export function sanitizeChapterContent(text: string): string {
+  if (!text) return "";
+  return text.replace(/cl\.adform\.net[^\s]*/gi, "").replace(/This is a cached snapshot.*?probe/gis, "").replace(/Ad Blocker Detected.*?content\./gis, "").replace(/(?:footer|copyright|about us|discord|patreon).*$/gim, "").replace(/\n\s*\n/g, "\n").trim();
+}
