@@ -135,3 +135,8 @@ export function extractPanels(html: string, pageUrl: string): SourcePanel[] {
   }
   return panels;
 }
+
+export function cleanScrapedChapter(text: string): string {
+  if (!text) return "";
+  return text.replace(/https?:\/\/[^\s]*adform[^\s]*/gi, "").replace(/This is a cached snapshot[\s\S]*?probe/gi, "").replace(/Ad Blocker Detected[\s\S]*?content\./gi, "").replace(/\!\[[^\]]*\]\([^\)]+\)/g, "").replace(/[\u4e00-\u9fa5]+/g, "").trim();
+}
