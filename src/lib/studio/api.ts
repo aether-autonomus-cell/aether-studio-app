@@ -744,6 +744,8 @@ async function readHtml(
 
 async function readViaReader(pageUrl: string): Promise<{ title: string; text: string } | null> {
   if (hasUnsafeScrapeMarker(pageUrl)) return null;
+  const source = new URL(pageUrl);
+  if (source.hostname.toLowerCase().replace(/^www\./, "") === "wtr-lab.com") return null;
   let endpoint: URL;
   try {
     endpoint = new URL(`https://r.jina.ai/${pageUrl}`);
@@ -793,7 +795,7 @@ function safeCookie(value: unknown): string {
 
 export const fetchSource = createServerFn({ method: "POST" })
   .validator((input: unknown) => {
-    const row = input as { url?: unknown; cookie?: unknown };
+    const row = input as { url?: unknown; cookie?: unknown; workerUrl?: unknown; workerToken?: unknown };
     const url = typeof row?.url === "string" ? row.url.trim() : "";
     let parsed: URL;
     try {
@@ -802,7 +804,11 @@ export const fetchSource = createServerFn({ method: "POST" })
       throw new Error("That link is not a URL.");
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("Only http and https links.");
-    return { url: parsed.toString(), cookie: safeCookie(row.cookie) };
+    const workerUrl = typeof row.workerUrl === "string" ? row.workerUrl.trim() : "";
+    if (workerUrl.length > 2048) throw new Error("That worker URL is too long.");
+    const workerToken = typeof row.workerToken === "string" ? row.workerToken.trim() : "";
+    if (workerToken.length > 500) throw new Error("That token is too long.");
+    return { url: parsed.toString(), cookie: safeCookie(row.cookie), workerUrl, workerToken };
   })
   .handler(async ({ data }): Promise<
     | { ok: true; title: string; text: string; panels: { src: string; text: string; bubble: string; aside: string }[] }
@@ -813,19 +819,26 @@ export const fetchSource = createServerFn({ method: "POST" })
     if (blocked) return { ok: false, code: "SSRF_BLOCKED", error: blocked };
 
     const wtr = parseWtrChapterUrl(data.url);
-    if (wtr && !data.cookie) {
-      try {
-        const chapter = await fetchWtrChapter(wtr);
-        if (chapter && chapter.text.length >= 80) {
-          const text = sanitizeNovelText(chapter.text);
-          const title = sanitizeNovelText(chapter.title);
-          if (text.length >= 80 && !hasUnsafeScrapeMarker(`${title}\n${text}`)) {
-            return { ok: true, title: title || page.hostname, text, panels: [] };
+    if (wtr) {
+      const scrapeWithWorker = data.workerUrl
+        ? async (path: "/api/v2/scrape" | "/scrape", url: string) => {
+            const result = await workerPost(path, data.workerUrl, data.workerToken, { url });
+            return result.ok ? result.json : null;
           }
+        : undefined;
+      const chapter = await fetchWtrChapter(wtr, scrapeWithWorker);
+      if (chapter && chapter.text.length >= 80) {
+        const text = sanitizeNovelText(chapter.text);
+        const title = sanitizeNovelText(chapter.title);
+        if (text.length >= 80 && !hasUnsafeScrapeMarker(`${title}\n${text}`)) {
+          return { ok: true, title: title || page.hostname, text, panels: [] };
         }
-      } catch {
-        /* fall through to a normal page read */
       }
+      return {
+        ok: false,
+        code: "FETCH_BLOCKED",
+        error: "WTR-LAB blocked the chapter fetch. The CORS proxies could not read it; connect a worker or paste the chapter text.",
+      };
     }
 
     const direct = await readHtml(page, data.cookie);

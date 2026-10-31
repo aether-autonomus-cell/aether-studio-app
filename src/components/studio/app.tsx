@@ -777,7 +777,7 @@ export function StudioApp() {
             continue;
           }
           setBusy(`Reading look context ${index + 1} of ${contextUrls.length}. These pages do not become panels.`);
-          const result = await fetchSource({ data: { url: href, cookie } });
+          const result = await fetchSource({ data: { url: href, cookie, workerUrl, workerToken } });
           if (result.ok) contextBits.push(result.text);
         }
         const cast = mergeCast(project.characters, gleanCast(contextBits.join("\n"), project.characters));
@@ -808,7 +808,7 @@ export function StudioApp() {
             continue;
           }
           setBusy(`Reading chapter ${chapter} (${index + 1} of ${urls.length})`);
-          const result = await fetchSource({ data: { url: href, cookie } });
+          const result = await fetchSource({ data: { url: href, cookie, workerUrl, workerToken } });
           if (!result.ok) {
             setError(`Chapter ${chapter}: ${result.error}`);
             return;
@@ -856,7 +856,7 @@ export function StudioApp() {
     }
     setBusy("Reading the page");
     try {
-      const result = await fetchSource({ data: { url, cookie } });
+      const result = await fetchSource({ data: { url, cookie, workerUrl, workerToken } });
       if (!result.ok) {
         setError(result.error);
         return;

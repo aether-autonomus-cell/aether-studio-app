@@ -33,7 +33,7 @@ test("aes chapter bodies round-trip", async () => {
   assert.match(text, /debt stayed/);
 });
 
-test("tracker-tainted reader JSON falls back to the chapter HTML, not Jina", async () => {
+test("tracker-tainted reader JSON falls back through CORS proxies without visiting WTR directly", async () => {
   const target = parseWtrChapterUrl("https://wtr-lab.com/en/novel/27190/the-story/chapter-586");
   assert.ok(target);
   const story = "Ren waited beneath the bridge while the rain washed away every footprint. ".repeat(
@@ -45,7 +45,8 @@ test("tracker-tainted reader JSON falls back to the chapter HTML, not Jina", asy
     const url = String(input);
     requests.push(url);
     if (url.includes("/api/chapters/")) return new Response('{"message":"prebid response"}');
-    if (url.includes("/api/reader/get")) return new Response('{"success":false}');
+    if (url.includes("/api/reader/get")) return new Response('{"content_url":"https://c1.adform.net/cookie"}');
+    if (url.includes("api.allorigins.win")) return new Response("unavailable", { status: 502 });
     return new Response(
       `<html><title>Debt Returns - WTR-LAB</title><article class="chapter-body"><p>${story}</p><p>The debt remained unpaid.</p></article></html>`,
       { headers: { "Content-Type": "text/html" } },
@@ -57,11 +58,46 @@ test("tracker-tainted reader JSON falls back to the chapter HTML, not Jina", asy
     assert.equal(chapter.title, "Debt Returns");
     assert.match(chapter.text, /footprint/);
     assert.doesNotMatch(chapter.text, /prebid|adform/i);
-    assert.equal(
-      requests.some((url) => url.includes("r.jina.ai")),
-      false,
+    assert.ok(requests.some((url) => url.startsWith("https://api.allorigins.win/raw?url=")));
+    assert.ok(requests.some((url) => url.startsWith("https://api.codetabs.com/v1/proxy?quest=")));
+    assert.equal(requests.some((url) => url === target.referer), false);
+    assert.equal(requests.some((url) => url.includes("r.jina.ai")), false);
+    assert.equal(requests.some((url) => url.includes("c1.adform.net")), false);
+    assert.ok(
+      requests.findIndex((url) => url.includes("api.allorigins.win")) <
+        requests.findIndex((url) => url.includes("api.codetabs.com")),
     );
-    assert.ok(requests.some((url) => url === target.referer));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("connected worker scraping is used after both CORS proxies fail", async () => {
+  const target = parseWtrChapterUrl("https://wtr-lab.com/en/novel/27190/the-story/chapter-586");
+  assert.ok(target);
+  const paths: string[] = [];
+  const workerUrls: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input);
+    if (url.includes("/api/chapters/")) return new Response("{}", { status: 502 });
+    if (url.includes("/api/reader/get")) return new Response('{"success":false}');
+    return new Response("proxy unavailable", { status: 502 });
+  };
+  try {
+    const story = "The worker opened the chapter while the rain covered the bridge. ".repeat(2);
+    const chapter = await fetchWtrChapter(target, async (path, url) => {
+      paths.push(path);
+      workerUrls.push(url);
+      return path === "/scrape"
+        ? { html: `<html><title>Worker Chapter</title><article><p>${story}</p></article></html>` }
+        : null;
+    });
+    assert.ok(chapter);
+    assert.equal(chapter.title, "Worker Chapter");
+    assert.match(chapter.text, /worker opened the chapter/);
+    assert.deepEqual(paths, ["/api/v2/scrape", "/scrape"]);
+    assert.deepEqual(workerUrls, [target.referer, target.referer]);
   } finally {
     globalThis.fetch = originalFetch;
   }

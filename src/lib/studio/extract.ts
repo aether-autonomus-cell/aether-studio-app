@@ -38,6 +38,7 @@ function stripChrome(value: string): string {
 const LONE_LABEL = /^(novel|novels|web|mtl|machine translation|next chapter|previous chapter|library|ranking|home|comments?|login|sign in)$/i;
 const AD_WARNING = /(?:ad[\s-]?block(?:er)?\s*(?:detected|warning|is enabled)|please\s+(?:disable|turn off)\s+(?:your\s+)?ad[\s-]?block(?:er)?|your ad[\s-]?block(?:er)?)|(?:enable javascript and cookies|cookies? must be enabled)/i;
 const UNSAFE_SCRAPE_MARKER = /adform\.net|prebid|1x1\s+image|tracker\s+probe/i;
+const TRACKER_OR_COOKIE_LINE = /\b(?:adform(?:\.net)?|prebid|set-cookie|cookie)\b/i;
 
 export function hasUnsafeScrapeMarker(value: string): boolean {
   return UNSAFE_SCRAPE_MARKER.test(value);
@@ -56,7 +57,14 @@ export function sanitizeNovelText(raw: string): string {
   const lines = stripScraperNoise(decodeEntities(raw))
     .split(/\n+/)
     .map((line) => stripChrome(line))
-    .filter((line) => line.length > 0 && !LONE_LABEL.test(line) && !AD_WARNING.test(line) && !/^[\d.%\s/#+-]+$/.test(line));
+    .filter(
+      (line) =>
+        line.length > 0 &&
+        !LONE_LABEL.test(line) &&
+        !AD_WARNING.test(line) &&
+        !TRACKER_OR_COOKIE_LINE.test(line) &&
+        !/^[\d.%\s/#+-]+$/.test(line),
+    );
   return lines.join("\n").trim();
 }
 
@@ -110,6 +118,17 @@ function visibleText(html: string): string {
 export function htmlToText(html: string): { title: string; text: string } {
   const titleRaw = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "";
   const title = sanitizeNovelText(visibleText(titleRaw)).replace(/\s+-\s*$/, "").trim();
+  const nextData = html.match(
+    /<script\b(?=[^>]*\bid=["']__NEXT_DATA__["'])[^>]*>([\s\S]*?)<\/script>/i,
+  )?.[1];
+  if (nextData) {
+    try {
+      const embedded = nextDataChapter(JSON.parse(nextData) as unknown);
+      if (embedded.text) return { title: embedded.title || title, text: embedded.text };
+    } catch {
+      // Fall back to the rendered chapter markup when Next data is malformed.
+    }
+  }
   const selectedRegion = region(html);
   const paragraphs = [...selectedRegion.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
     .map((paragraph) => sanitizeNovelText(visibleText(paragraph[1] ?? "")))
@@ -117,23 +136,14 @@ export function htmlToText(html: string): { title: string; text: string } {
   const text = sanitizeNovelText(
     paragraphs.length ? paragraphs.join("\n") : visibleText(selectedRegion),
   );
-  const nextData = html.match(
-    /<script\b(?=[^>]*\bid=["']__NEXT_DATA__["'])[^>]*>([\s\S]*?)<\/script>/i,
-  )?.[1];
-  if (nextData) {
-    try {
-      const embedded = nextDataChapter(JSON.parse(nextData) as unknown);
-      if (embedded.text.length > text.length)
-        return { title: embedded.title || title, text: embedded.text };
-    } catch {
-      return { title, text };
-    }
-  }
   return { title, text };
 }
 
 function nextDataChapter(value: unknown): { title: string; text: string } {
-  const stack: unknown[] = [value];
+  const root = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const props = root.props && typeof root.props === "object" ? (root.props as Record<string, unknown>) : {};
+  const pageProps = props.pageProps;
+  const stack: unknown[] = [pageProps && typeof pageProps === "object" ? pageProps : value];
   let title = "";
   let bestText = "";
   const contentKeys = new Set([

@@ -1,4 +1,4 @@
-const COMPAT_PATHS = ["/api/generate", "/extract", "/tts", "/render", "/health"] as const;
+const COMPAT_PATHS = ["/api/generate", "/extract", "/tts", "/render", "/health", "/api/v2/scrape", "/scrape"] as const;
 
 export type WorkerPath =
   | "/api/v1/health"

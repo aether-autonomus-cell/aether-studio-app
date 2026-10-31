@@ -109,6 +109,27 @@ test("chapter content can be read from Next data", () => {
   assert.match(text, /debt stayed/);
 });
 
+test("chapter text prefers Next data and omits tracker and cookie strings", () => {
+  const story = "The embedded chapter remained clean while Ren crossed the bridge. ".repeat(2);
+  const html = `<html><title>WTR-LAB</title><article><p>${"DOM fallback must not win. ".repeat(12)}</p></article><script id="__NEXT_DATA__" type="application/json">${JSON.stringify(
+    {
+      props: {
+        pageProps: {
+          chapter: {
+            title: "Chapter 18",
+            paragraphs: [story, "adform.net prebid Cookie: session=private-value", "The debt stayed."],
+          },
+        },
+      },
+    },
+  )}</script></html>`;
+  const { title, text } = htmlToText(html);
+  assert.equal(title, "Chapter 18");
+  assert.match(text, /embedded chapter remained clean/);
+  assert.match(text, /debt stayed/);
+  assert.doesNotMatch(text, /DOM fallback|adform|prebid|cookie|private-value/i);
+});
+
 test("unsafe tracker redirects and response text are identifiable", () => {
   assert.equal(hasUnsafeScrapeMarker("https://c1.adform.net/cookie"), true);
   assert.equal(hasUnsafeScrapeMarker("prebid.admatic.de"), true);

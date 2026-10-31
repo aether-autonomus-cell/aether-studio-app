@@ -1,8 +1,9 @@
-/** WTR-LAB serves chapter text from a JSON API, not the Cloudflare HTML shell. */
+/** WTR-LAB chapter extraction prefers its JSON API, then clean HTML fallbacks. */
 
 import { hasUnsafeScrapeMarker, htmlToText } from "./extract.ts";
 
 const KEY_TEXT = "IJAFUUxjM25hyzL2AZrn0wl7cESED6Ru";
+const WORKER_SCRAPE_PATHS = ["/api/v2/scrape", "/scrape"] as const;
 
 export type WtrTarget = {
   origin: string;
@@ -11,6 +12,11 @@ export type WtrTarget = {
   chapterNo: string;
   referer: string;
 };
+
+export type WtrWorkerScrape = (
+  path: (typeof WORKER_SCRAPE_PATHS)[number],
+  url: string,
+) => Promise<unknown | null>;
 
 function b64(value: string): Uint8Array<ArrayBuffer> {
   const binary = atob(value);
@@ -100,13 +106,18 @@ function browserHeaders(referer: string, json: boolean): Headers {
 }
 
 async function readJson(url: string, init: RequestInit): Promise<unknown | null> {
+  if (hasUnsafeScrapeMarker(url)) return null;
   let res: Response;
   try {
-    res = await fetch(url, { ...init, redirect: "follow", signal: AbortSignal.timeout(20000) });
+    res = await fetch(url, { ...init, redirect: "manual", signal: AbortSignal.timeout(20000) });
   } catch {
     return null;
   }
-  if (!res.ok || hasUnsafeScrapeMarker(`${res.url || url}\n${url}`)) return null;
+  if (
+    !res.ok ||
+    (res.status >= 300 && res.status < 400) ||
+    hasUnsafeScrapeMarker(`${res.url || url}\n${url}`)
+  ) return null;
   try {
     const raw = await res.text();
     if (hasUnsafeScrapeMarker(raw)) return null;
@@ -217,20 +228,8 @@ export function containsHan(text: string): boolean {
   return /\p{Script=Han}/u.test(text);
 }
 
-async function readChapterHtml(target: WtrTarget): Promise<{ title: string; text: string } | null> {
-  let res: Response;
-  try {
-    res = await fetch(target.referer, {
-      method: "GET",
-      redirect: "follow",
-      signal: AbortSignal.timeout(20000),
-      headers: browserHeaders(target.referer, false),
-    });
-  } catch {
-    return null;
-  }
-  if (!res.ok || hasUnsafeScrapeMarker(res.url || target.referer)) return null;
-  const html = (await res.text()).slice(0, 500_000);
+function usableChapterHtml(html: string, pageUrl: string): { title: string; text: string } | null {
+  if (hasUnsafeScrapeMarker(pageUrl)) return null;
   const extracted = htmlToText(html);
   if (
     extracted.text.length < 80 ||
@@ -241,7 +240,57 @@ async function readChapterHtml(target: WtrTarget): Promise<{ title: string; text
   return extracted;
 }
 
-export async function fetchWtrChapter(target: WtrTarget): Promise<{ title: string; text: string } | null> {
+async function readProxyHtml(target: WtrTarget): Promise<{ title: string; text: string } | null> {
+  const encoded = encodeURIComponent(target.referer);
+  const proxies = [
+    `https://api.allorigins.win/raw?url=${encoded}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encoded}`,
+  ];
+  for (const proxyUrl of proxies) {
+    let response: Response;
+    try {
+      response = await fetch(proxyUrl, {
+        method: "GET",
+        redirect: "manual",
+        signal: AbortSignal.timeout(20000),
+        headers: { Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8" },
+      });
+    } catch {
+      continue;
+    }
+    if (!response.ok || hasUnsafeScrapeMarker(response.url || proxyUrl)) continue;
+    const html = (await response.text()).slice(0, 500_000);
+    const chapter = usableChapterHtml(html, response.url || proxyUrl);
+    if (chapter) return chapter;
+  }
+  return null;
+}
+
+function workerResponseHtml(value: unknown): string | null {
+  if (typeof value === "string") return value.slice(0, 500_000);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  for (const key of ["html", "content", "body", "text"]) {
+    if (typeof row[key] === "string") return (row[key] as string).slice(0, 500_000);
+  }
+  return null;
+}
+
+async function readWorkerHtml(target: WtrTarget, scrape: WtrWorkerScrape): Promise<{ title: string; text: string } | null> {
+  for (const path of WORKER_SCRAPE_PATHS) {
+    const response = await scrape(path, target.referer);
+    const html = workerResponseHtml(response);
+    if (!html) continue;
+    const chapter = usableChapterHtml(html, target.referer);
+    if (chapter) return chapter;
+  }
+  return null;
+}
+
+export async function fetchWtrChapter(
+  target: WtrTarget,
+  workerScrape?: WtrWorkerScrape,
+): Promise<{ title: string; text: string } | null> {
   const headers = browserHeaders(target.referer, true);
   const list = await readJson(
     `${target.origin}/api/chapters/${target.rawId}?start=${target.chapterNo}&end=${target.chapterNo}`,
@@ -291,5 +340,7 @@ export async function fetchWtrChapter(target: WtrTarget): Promise<{ title: strin
     if (hasUnsafeScrapeMarker(title)) continue;
     return { title, text };
   }
-  return readChapterHtml(target);
+  const proxied = await readProxyHtml(target);
+  if (proxied) return proxied;
+  return workerScrape ? readWorkerHtml(target, workerScrape) : null;
 }
