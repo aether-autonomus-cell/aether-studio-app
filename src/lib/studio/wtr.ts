@@ -1,5 +1,7 @@
 /** WTR-LAB serves chapter text from a JSON API, not the Cloudflare HTML shell. */
 
+import { hasUnsafeScrapeMarker, htmlToText } from "./extract.ts";
+
 const KEY_TEXT = "IJAFUUxjM25hyzL2AZrn0wl7cESED6Ru";
 
 export type WtrTarget = {
@@ -104,9 +106,11 @@ async function readJson(url: string, init: RequestInit): Promise<unknown | null>
   } catch {
     return null;
   }
-  if (!res.ok) return null;
+  if (!res.ok || hasUnsafeScrapeMarker(`${res.url || url}\n${url}`)) return null;
   try {
-    return (await res.json()) as unknown;
+    const raw = await res.text();
+    if (hasUnsafeScrapeMarker(raw)) return null;
+    return JSON.parse(raw) as unknown;
   } catch {
     return null;
   }
@@ -213,6 +217,30 @@ export function containsHan(text: string): boolean {
   return /\p{Script=Han}/u.test(text);
 }
 
+async function readChapterHtml(target: WtrTarget): Promise<{ title: string; text: string } | null> {
+  let res: Response;
+  try {
+    res = await fetch(target.referer, {
+      method: "GET",
+      redirect: "follow",
+      signal: AbortSignal.timeout(20000),
+      headers: browserHeaders(target.referer, false),
+    });
+  } catch {
+    return null;
+  }
+  if (!res.ok || hasUnsafeScrapeMarker(res.url || target.referer)) return null;
+  const html = (await res.text()).slice(0, 500_000);
+  const extracted = htmlToText(html);
+  if (
+    extracted.text.length < 80 ||
+    hasUnsafeScrapeMarker(`${extracted.title}\n${extracted.text}`)
+  ) {
+    return null;
+  }
+  return extracted;
+}
+
 export async function fetchWtrChapter(target: WtrTarget): Promise<{ title: string; text: string } | null> {
   const headers = browserHeaders(target.referer, true);
   const list = await readJson(
@@ -258,9 +286,10 @@ export async function fetchWtrChapter(target: WtrTarget): Promise<{ title: strin
     }
     const collected = await collectChapterText(json);
     const text = collected.lines.join("\n\n").trim();
-    if (text.length < 80) continue;
+    if (text.length < 80 || hasUnsafeScrapeMarker(`${collected.title}\n${text}`)) continue;
     const title = (meta?.title || collected.title || `Chapter ${target.chapterNo}`).trim();
+    if (hasUnsafeScrapeMarker(title)) continue;
     return { title, text };
   }
-  return null;
+  return readChapterHtml(target);
 }

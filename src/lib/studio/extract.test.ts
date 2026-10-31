@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cleanScrapedChapter, extractPanels, htmlToText, sanitizeNovelText } from "./extract.ts";
+import { cleanScrapedChapter, extractPanels, hasUnsafeScrapeMarker, htmlToText, sanitizeNovelText } from "./extract.ts";
 
 test("page text is not clipped at 8000 characters", () => {
   const body = `Rain ${"lantern ".repeat(1600)}`;
@@ -82,4 +82,37 @@ test("chapter html drops the site title chrome", () => {
   assert.doesNotMatch(title, /WTR-?LAB/i);
   assert.doesNotMatch(text, /WTR-?LAB|95\.1%|586\/616|#586Chapter/i);
   assert.match(text, /spear stayed lowered/);
+});
+
+test("chapter HTML prefers the chapter body and keeps paragraph boundaries", () => {
+  const story = "Ren held the bridge while the rain covered every footprint. ".repeat(3);
+  const html = `<html><title>Debt Returns - WTR-LAB</title><p>Navigation copy that must not be used.</p><div class="chapter-body"><div><p>${story}</p><p>The debt remained unpaid.</p></div></div></html>`;
+  const { title, text } = htmlToText(html);
+  assert.equal(title, "Debt Returns");
+  assert.match(text, /Ren held the bridge/);
+  assert.match(text, /\nThe debt remained unpaid/);
+  assert.doesNotMatch(text, /Navigation copy/);
+});
+
+test("chapter content can be read from Next data", () => {
+  const story = "The gate stayed open while Ren counted the rain. ".repeat(3);
+  const json = JSON.stringify({
+    props: {
+      pageProps: { chapter: { title: "Chapter 18", paragraphs: [story, "The debt stayed."] } },
+    },
+  });
+  const { title, text } = htmlToText(
+    `<html><title>WTR-LAB</title><script id="__NEXT_DATA__" type="application/json">${json}</script></html>`,
+  );
+  assert.equal(title, "Chapter 18");
+  assert.match(text, /gate stayed open/);
+  assert.match(text, /debt stayed/);
+});
+
+test("unsafe tracker redirects and response text are identifiable", () => {
+  assert.equal(hasUnsafeScrapeMarker("https://c1.adform.net/cookie"), true);
+  assert.equal(hasUnsafeScrapeMarker("prebid.admatic.de"), true);
+  assert.equal(hasUnsafeScrapeMarker("1x1 image"), true);
+  assert.equal(hasUnsafeScrapeMarker("tracker probe"), true);
+  assert.equal(hasUnsafeScrapeMarker("The story continued beyond the bridge."), false);
 });

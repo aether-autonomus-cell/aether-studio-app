@@ -10,7 +10,7 @@ import {
   textVia,
   type AiSession,
 } from "@/lib/studio/ai-router";
-import { htmlToText, extractPanels, sanitizeNovelText, cleanScrapedChapter } from "@/lib/studio/extract";
+import { htmlToText, extractPanels, hasUnsafeScrapeMarker, sanitizeNovelText, cleanScrapedChapter } from "@/lib/studio/extract";
 import { containsHan, fetchWtrChapter, parseWtrChapterUrl } from "@/lib/studio/wtr";
 import { assertJobId, jobResourcePath, parseJobStatus, readJobId, type JobSnapshot } from "@/lib/studio/jobs";
 import { composeLook, parseStudioAction, type StudioAction } from "@/lib/studio/bible";
@@ -661,6 +661,9 @@ async function readHtml(
     let current = url;
     let blockedEarly = false;
     for (let hop = 0; hop < 4; hop += 1) {
+      if (hasUnsafeScrapeMarker(current.toString())) {
+        return { ok: false, code: "FETCH_FAILED", error: "The page URL points to an unsafe tracker." };
+      }
       const blocked = await assertPublic(current.hostname);
       if (blocked) return { ok: false, code: "SSRF_BLOCKED", error: blocked };
       let res: Response;
@@ -683,6 +686,11 @@ async function readHtml(
           break;
         }
         current = new URL(location, current);
+        if (hasUnsafeScrapeMarker(current.toString())) {
+          last = { ok: false, code: "FETCH_FAILED", error: "The page redirected to an unsafe tracker." };
+          blockedEarly = true;
+          break;
+        }
         continue;
       }
       if (res.status === 401 || res.status === 402) {
@@ -735,6 +743,7 @@ async function readHtml(
 }
 
 async function readViaReader(pageUrl: string): Promise<{ title: string; text: string } | null> {
+  if (hasUnsafeScrapeMarker(pageUrl)) return null;
   let endpoint: URL;
   try {
     endpoint = new URL(`https://r.jina.ai/${pageUrl}`);
@@ -757,13 +766,19 @@ async function readViaReader(pageUrl: string): Promise<{ title: string; text: st
   } catch {
     return null;
   }
-  if (!res.ok) return null;
+  if (!res.ok || hasUnsafeScrapeMarker(res.url || endpoint.toString())) return null;
   const raw = (await res.text()).slice(0, 500_000);
+  if (hasUnsafeScrapeMarker(raw)) return null;
   const titleLine = raw.match(/^Title:\s*(.+)$/m);
   const body = raw.replace(/^Title:\s*.+$/m, "").replace(/^URL Source:\s*.+$/m, "").replace(/^Markdown Content:\s*/m, "");
   const extracted = htmlToText(`<title>${titleLine?.[1] ?? ""}</title><article><p>${body}</p></article>`);
   const text = extracted.text;
-  if (text.length < 80 || looksLikeChallenge(raw) || looksLikePaywall(text)) return null;
+  if (
+    text.length < 80 ||
+    hasUnsafeScrapeMarker(`${extracted.title}\n${text}`) ||
+    looksLikeChallenge(raw) ||
+    looksLikePaywall(text)
+  ) return null;
   return { title: extracted.title || titleLine?.[1]?.trim() || "", text };
 }
 
@@ -804,7 +819,9 @@ export const fetchSource = createServerFn({ method: "POST" })
         if (chapter && chapter.text.length >= 80) {
           const text = sanitizeNovelText(chapter.text);
           const title = sanitizeNovelText(chapter.title);
-          if (text.length >= 80) return { ok: true, title: title || page.hostname, text, panels: [] };
+          if (text.length >= 80 && !hasUnsafeScrapeMarker(`${title}\n${text}`)) {
+            return { ok: true, title: title || page.hostname, text, panels: [] };
+          }
         }
       } catch {
         /* fall through to a normal page read */
@@ -816,7 +833,12 @@ export const fetchSource = createServerFn({ method: "POST" })
       const challenge = looksLikeChallenge(direct.html);
       const extracted = htmlToText(direct.html);
       const panels = extractPanels(direct.html, direct.finalUrl.toString());
-      if (!challenge && (extracted.text.length >= 80 || panels.length > 0) && !looksLikePaywall(extracted.text)) {
+      if (
+        !challenge &&
+        !hasUnsafeScrapeMarker(`${direct.finalUrl}\n${extracted.title}\n${extracted.text}`) &&
+        (extracted.text.length >= 80 || panels.length > 0) &&
+        !looksLikePaywall(extracted.text)
+      ) {
         return {
           ok: true,
           title: extracted.title || direct.finalUrl.hostname,
@@ -828,7 +850,7 @@ export const fetchSource = createServerFn({ method: "POST" })
       return direct;
     }
 
-    const fallback = data.cookie ? null : await readViaReader(data.url);
+    const fallback = data.cookie || wtr ? null : await readViaReader(data.url);
     if (fallback) {
       return { ok: true, title: fallback.title || page.hostname, text: fallback.text, panels: [] };
     }

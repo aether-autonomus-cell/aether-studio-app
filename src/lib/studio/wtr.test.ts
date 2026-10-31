@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decryptWtrBody, parseWtrChapterUrl } from "./wtr.ts";
+import { decryptWtrBody, fetchWtrChapter, parseWtrChapterUrl } from "./wtr.ts";
 
 test("a chapter link is recognised without treating the novel home as a chapter", () => {
   const chapter = parseWtrChapterUrl("https://wtr-lab.com/en/novel/27190/the-story/chapter-586");
@@ -31,4 +31,38 @@ test("aes chapter bodies round-trip", async () => {
   const text = await decryptWtrBody(token);
   assert.match(text, /bridge was empty/);
   assert.match(text, /debt stayed/);
+});
+
+test("tracker-tainted reader JSON falls back to the chapter HTML, not Jina", async () => {
+  const target = parseWtrChapterUrl("https://wtr-lab.com/en/novel/27190/the-story/chapter-586");
+  assert.ok(target);
+  const story = "Ren waited beneath the bridge while the rain washed away every footprint. ".repeat(
+    2,
+  );
+  const requests: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input);
+    requests.push(url);
+    if (url.includes("/api/chapters/")) return new Response('{"message":"prebid response"}');
+    if (url.includes("/api/reader/get")) return new Response('{"success":false}');
+    return new Response(
+      `<html><title>Debt Returns - WTR-LAB</title><article class="chapter-body"><p>${story}</p><p>The debt remained unpaid.</p></article></html>`,
+      { headers: { "Content-Type": "text/html" } },
+    );
+  };
+  try {
+    const chapter = await fetchWtrChapter(target);
+    assert.ok(chapter);
+    assert.equal(chapter.title, "Debt Returns");
+    assert.match(chapter.text, /footprint/);
+    assert.doesNotMatch(chapter.text, /prebid|adform/i);
+    assert.equal(
+      requests.some((url) => url.includes("r.jina.ai")),
+      false,
+    );
+    assert.ok(requests.some((url) => url === target.referer));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
