@@ -604,7 +604,7 @@ export function jobPacket(project: Project, pass: "assemble" | "revoice" = "asse
   return jobPacketV2Schema.parse({
     version: 2,
     language,
-    voice: voiceFor(language, project.voice),
+    voice: voiceFor(language),
     title: project.title.trim() || "Untitled chapter",
     aspect: project.aspect === "9:16" ? "9:16" : "16:9",
     local_model: project.localModel === "airllm" || project.localModel === "fast" ? project.localModel : "gguf",

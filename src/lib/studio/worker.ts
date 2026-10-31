@@ -1,21 +1,21 @@
-const PATHS = [
-  "/api/v1/health",
-  "/api/v1/jobs",
-  "/api/v1/direct",
-  "/api/v1/paint",
-  "/api/v1/speak",
-  "/api/v1/llm",
-  "/api/v1/youtube-upload",
-  "/api/v1/preview.mp4",
-  "/api/v1/check",
-  "/api/v1/fetch",
-  "/api/v1/ocr",
-] as const;
+const COMPAT_PATHS = ["/api/generate", "/extract", "/tts", "/render", "/health"] as const;
 
-export type WorkerPath = (typeof PATHS)[number];
+export type WorkerPath =
+  | "/api/v1/health"
+  | "/api/v1/jobs"
+  | "/api/v1/direct"
+  | "/api/v1/paint"
+  | "/api/v1/speak"
+  | "/api/v1/llm"
+  | "/api/v1/youtube-upload"
+  | "/api/v1/preview.mp4"
+  | "/api/v1/check"
+  | "/api/v1/fetch"
+  | "/api/v1/ocr"
+  | (typeof COMPAT_PATHS)[number];
 
 export function workerEndpoint(raw: string, path: string): URL {
-  if (!path.startsWith("/api/v1/") || path.includes("..") || path.includes("//")) {
+  if ((!path.startsWith("/api/v1/") && !(COMPAT_PATHS as readonly string[]).includes(path)) || path.includes("..") || path.includes("//")) {
     throw new Error("That worker path is not valid.");
   }
   const trimmed = raw.trim();
@@ -30,9 +30,9 @@ export function workerEndpoint(raw: string, path: string): URL {
     throw new Error("Only http and https workers.");
   }
   let prefix = origin.pathname.replace(/\/+$/, "");
-  if (prefix.endsWith("/api/v1/health")) prefix = prefix.slice(0, -"/api/v1/health".length);
-  else if (prefix.endsWith("/api/v1/jobs")) prefix = prefix.slice(0, -"/api/v1/jobs".length);
-  else if (prefix.endsWith("/api/v1")) prefix = prefix.slice(0, -"/api/v1".length);
+  const suffixes = ["/api/v1/health", "/api/v1/jobs", "/api/v1", ...COMPAT_PATHS];
+  const suffix = suffixes.find((candidate) => prefix.endsWith(candidate));
+  if (suffix) prefix = prefix.slice(0, -suffix.length);
   const next = new URL(origin.origin);
   next.pathname = `${prefix}${path}`.replace(/\/{2,}/g, "/");
   return next;

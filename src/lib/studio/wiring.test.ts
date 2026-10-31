@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { FACTORY_CELL } from "./factory-cell.ts";
+import { chooseVoice } from "./export.ts";
 
 const app = readFileSync(new URL("../../components/studio/app.tsx", import.meta.url), "utf8");
 const api = readFileSync(new URL("./api.ts", import.meta.url), "utf8");
@@ -37,6 +38,11 @@ test("factory cell exposes the gpu worker the app calls", () => {
     "/api/v1/jobs",
     "/api/v1/preview.mp4",
     "/api/v1/youtube-upload",
+    "/api/generate",
+    "/extract",
+    "/tts",
+    "/render",
+    "@app.get(\"/health\")",
     "/api/v1/speak",
     "edge_tts",
     "hi-IN-MadhurNeural",
@@ -53,4 +59,19 @@ test("factory cell exposes the gpu worker the app calls", () => {
   }
   assert.equal(FACTORY_CELL.includes("tensor_split=None"), false);
   assert.equal(FACTORY_CELL.includes("Generating images"), false);
+});
+
+test("response handling never injects redaction placeholders", () => {
+  assert.doesNotMatch(api, /\[redacted\]/i);
+});
+
+test("on-device speech only selects the requested language voice", () => {
+  const voices = [
+    { name: "Microsoft David", lang: "en-US" },
+    { name: "Microsoft Christopher Online (Natural)", lang: "en-US" },
+    { name: "Microsoft Madhur Online (Natural)", lang: "hi-IN" },
+  ] as SpeechSynthesisVoice[];
+  assert.equal(chooseVoice(voices, "Good evening.")?.name, "Microsoft Christopher Online (Natural)");
+  assert.equal(chooseVoice(voices, "नमस्ते।")?.name, "Microsoft Madhur Online (Natural)");
+  assert.equal(chooseVoice([voices[0]!], "Good evening."), null);
 });

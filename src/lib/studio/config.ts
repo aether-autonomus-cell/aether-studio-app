@@ -4,7 +4,4 @@ export const studioConfig = {
   xaiEnabled: false,
   geminiModel: "gemini-2.5-flash",
   geminiImageModel: "gemini-2.5-flash-image",
-  /** Male prebuilt voice. Used only when the phone asks Gemini to read. */
-  geminiVoice: "Charon",
-  geminiTtsModel: "gemini-2.5-flash-preview-tts",
 } as const;

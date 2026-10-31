@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { SAMPLE, jobPacket } from "./model.ts";
-import { jobPacketV2Schema } from "./schema.ts";
+import { jobPacketV2Schema, voiceFor } from "./schema.ts";
 
 test("sample export is job packet v2", () => {
   const packet = jobPacket(SAMPLE);
@@ -34,6 +34,11 @@ test("hindi text selects the hindi male voice", () => {
   });
   assert.equal(packet.language, "hi");
   assert.equal(packet.voice, "hi-IN-MadhurNeural");
+});
+
+test("voice selection is fixed by language", () => {
+  assert.equal(voiceFor("en"), "en-US-ChristopherNeural");
+  assert.equal(voiceFor("hi"), "hi-IN-MadhurNeural");
 });
 
 test("youtube privacy stays off the job packet", () => {

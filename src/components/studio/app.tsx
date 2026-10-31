@@ -310,8 +310,6 @@ export function StudioApp() {
   const [duty, setDuty] = useState<Duty>("split");
   const [imageRepo, setImageRepo] = useState("");
   const [language, setLanguage] = useState<"hi" | "en">("en");
-  const [voiceEn, setVoiceEn] = useState("en-US-ChristopherNeural");
-  const [voiceHi, setVoiceHi] = useState("hi-IN-MadhurNeural");
   const [masters, setMasters] = useState<{ en: boolean; hi: boolean }>({ en: false, hi: false });
   const [previewSeen, setPreviewSeen] = useState(false);
   const [previewBroken, setPreviewBroken] = useState(false);
@@ -362,8 +360,8 @@ export function StudioApp() {
       if (saved.imageRepo) setImageRepo(saved.imageRepo);
       const flags: Record<string, true> = {};
       for (const scene of saved.scenes) {
-        if (scene.voiceEn) flags[`${scene.id}:en`] = true;
-        if (scene.voiceHi) flags[`${scene.id}:hi`] = true;
+        if (hasRequestedVoice(scene.voiceEn, "en")) flags[`${scene.id}:en`] = true;
+        if (hasRequestedVoice(scene.voiceHi, "hi")) flags[`${scene.id}:hi`] = true;
       }
       setVoiced(flags);
       setTagDraft((saved.seo?.tags || []).join(", "));
@@ -384,7 +382,7 @@ export function StudioApp() {
 
   const preset = PROVIDER_PRESETS[provider];
   function voiceFor(next: ReelLanguage) {
-    return next === "hi" ? voiceHi : voiceEn;
+    return next === "hi" ? "hi-IN-MadhurNeural" : "en-US-ChristopherNeural";
   }
   const voice = voiceFor(language);
   const filmSrc = masterSrc(workerUrl, workerToken, language);
@@ -515,9 +513,15 @@ export function StudioApp() {
     }
   }
 
+  function hasRequestedVoice(path: string | undefined, next: ReelLanguage): boolean {
+    const slug = next === "hi" ? "hiINMadhurNeural" : "enUSChristopherNeural";
+    return Boolean(path?.includes(slug));
+  }
+
   function applyLanguage(next: ReelLanguage, source: Project = project) {
     const shown = { ...withLanguage(rememberScript(source, language), next), voice: voiceFor(next) };
     setLanguage(next);
+    setTrack(null);
     setProject(shown);
     setTagDraft(shown.seo.tags.join(", "));
     setNotice("Language change = audio, captions, and SEO only. Pictures stay.");
@@ -540,7 +544,7 @@ export function StudioApp() {
     const pending = source.scenes.filter((scene) => {
       if (!voiceLine(scene, next)) return false;
       const saved = next === "hi" ? scene.voiceHi : scene.voiceEn;
-      return !saved && !voiceCache.has(`${scene.id}:${next}`);
+      return !hasRequestedVoice(saved, next) && !voiceCache.has(`${scene.id}:${next}`);
     });
     if (!pending.length) {
       if (force) setNotice("Both voice tracks that exist stay. Nothing was redrawn.");
@@ -1402,7 +1406,7 @@ export function StudioApp() {
       const line = voiceLine(scene, language);
       const key = `${scene.id}:${language}`;
       const savedPath = language === "hi" ? scene.voiceHi : scene.voiceEn;
-      const cached = voiceCache.get(key) || (savedPath ? absVoice(savedPath) : "");
+      const cached = voiceCache.get(key) || (savedPath && hasRequestedVoice(savedPath, language) ? absVoice(savedPath) : "");
       if (cached) {
         try {
           await new Audio(cached).play();
@@ -1602,47 +1606,6 @@ export function StudioApp() {
                 </button>
               </div>
             </fieldset>
-            <label className="block" htmlFor="voice-en">
-              <span className="text-sm font-medium text-paper">English male voice</span>
-              <select
-                id="voice-en"
-                value={voiceEn}
-                onChange={(event) => {
-                  setVoiceEn(event.target.value);
-                  for (const key of [...voiceCache.keys()]) if (key.endsWith(":en") || key === "narration:en") voiceCache.delete(key);
-                  setVoiced((current) => {
-                    const next = { ...current };
-                    for (const key of Object.keys(next)) if (key.endsWith(":en")) delete next[key];
-                    return next;
-                  });
-                  setMasters((current) => ({ ...current, en: false }));
-                }}
-                className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base"
-              >
-                <option value="en-US-ChristopherNeural">Christopher</option>
-                <option value="en-US-AndrewNeural">Andrew</option>
-              </select>
-            </label>
-            <label className="block" htmlFor="voice-hi">
-              <span className="text-sm font-medium text-paper">Hindi male voice</span>
-              <select
-                id="voice-hi"
-                value={voiceHi}
-                onChange={(event) => {
-                  setVoiceHi(event.target.value);
-                  for (const key of [...voiceCache.keys()]) if (key.endsWith(":hi") || key === "narration:hi") voiceCache.delete(key);
-                  setVoiced((current) => {
-                    const next = { ...current };
-                    for (const key of Object.keys(next)) if (key.endsWith(":hi")) delete next[key];
-                    return next;
-                  });
-                  setMasters((current) => ({ ...current, hi: false }));
-                }}
-                className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base"
-              >
-                <option value="hi-IN-MadhurNeural">Madhur</option>
-              </select>
-            </label>
             <label className="block" htmlFor="retry-count">
               <span className="text-sm font-medium text-paper">Vision retries per panel</span>
               <input id="retry-count" value={retries} onChange={(event) => setRetries(event.target.value)} inputMode="numeric" className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none" />

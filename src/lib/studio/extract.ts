@@ -36,13 +36,22 @@ function stripChrome(value: string): string {
 }
 
 const LONE_LABEL = /^(novel|novels|web|mtl|machine translation|next chapter|previous chapter|library|ranking|home|comments?|login|sign in)$/i;
+const AD_WARNING = /(?:ad[\s-]?block(?:er)?\s*(?:detected|warning|is enabled)|please\s+(?:disable|turn off)\s+(?:your\s+)?ad[\s-]?block(?:er)?|your ad[\s-]?block(?:er)?)|(?:enable javascript and cookies|cookies? must be enabled)/i;
+
+function stripScraperNoise(value: string): string {
+  return value
+    .replace(/^[\t ]*(?:set-cookie|cookie)\s*:[^\n]*/gim, "")
+    .replace(/This is a cached snapshot[\s\S]*?\bprobe\b/gi, " ")
+    .replace(/Ad Blocker Detected[\s\S]*?\bcontent[.!]?/gi, " ")
+    .replace(/(?:please\s+)?(?:disable|turn off)\s+(?:your\s+)?ad[\s-]?block(?:er)?[^.!?\n]*[.!?]?/gi, " ");
+}
 
 /** Drop ads, nav, chapter chrome, and site names. Keep the story, including a long ending. */
 export function sanitizeNovelText(raw: string): string {
-  const lines = decodeEntities(raw)
+  const lines = stripScraperNoise(decodeEntities(raw))
     .split(/\n+/)
     .map((line) => stripChrome(line))
-    .filter((line) => line.length > 0 && !LONE_LABEL.test(line) && !/^[\d.%\s/#+-]+$/.test(line));
+    .filter((line) => line.length > 0 && !LONE_LABEL.test(line) && !AD_WARNING.test(line) && !/^[\d.%\s/#+-]+$/.test(line));
   return lines.join("\n").trim();
 }
 
@@ -99,7 +108,7 @@ function splitNearby(alt: string, nearby: string): { bubble: string; aside: stri
   if (altLine) bubbleLines.push(altLine.slice(0, 180));
   for (const line of nearby.split(/\n+/).map((part) => part.trim()).filter(Boolean)) {
     const quoted = /^["“「『']/.test(line) || /["”」』']$/.test(line);
-    if ((quoted || line.length <= 90) && line.length <= 160) bubbleLines.push(line);
+    if ((quoted || /^[^:]{1,32}:\s/.test(line)) && line.length <= 160) bubbleLines.push(line);
     else asideLines.push(line);
   }
   const bubble = bubbleLines.join(" ").replace(/\s+/g, " ").trim().slice(0, 400);
@@ -108,7 +117,7 @@ function splitNearby(alt: string, nearby: string): { bubble: string; aside: stri
   return { bubble, aside, text };
 }
 
-/** Panel images in reading order. Alt and short lines are bubble dialogue. The rest sits near the face. */
+/** Panel images in reading order. Alt text and quoted/speaker-labeled lines are bubble dialogue. */
 export function extractPanels(html: string, pageUrl: string): SourcePanel[] {
   const body = region(html)
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -138,5 +147,10 @@ export function extractPanels(html: string, pageUrl: string): SourcePanel[] {
 
 export function cleanScrapedChapter(text: string): string {
   if (!text) return "";
-  return text.replace(/https?:\/\/[^\s]*adform[^\s]*/gi, "").replace(/This is a cached snapshot[\s\S]*?probe/gi, "").replace(/Ad Blocker Detected[\s\S]*?content\./gi, "").replace(/\!\[[^\]]*\]\([^\)]+\)/g, "").replace(/[\u4e00-\u9fa5]+/g, "").trim();
+  return sanitizeNovelText(
+    text
+      .replace(/https?:\/\/[^\s]*adform[^\s]*/gi, "")
+      .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
+      .replace(/[\u4e00-\u9fa5]+/g, ""),
+  );
 }

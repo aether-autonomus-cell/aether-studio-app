@@ -10,13 +10,13 @@ import {
   textVia,
   type AiSession,
 } from "@/lib/studio/ai-router";
-import { htmlToText, extractPanels, sanitizeNovelText } from "@/lib/studio/extract";
+import { htmlToText, extractPanels, sanitizeNovelText, cleanScrapedChapter } from "@/lib/studio/extract";
 import { containsHan, fetchWtrChapter, parseWtrChapterUrl } from "@/lib/studio/wtr";
 import { assertJobId, jobResourcePath, parseJobStatus, readJobId, type JobSnapshot } from "@/lib/studio/jobs";
 import { composeLook, parseStudioAction, type StudioAction } from "@/lib/studio/bible";
 import type { Character, Scene, Seo } from "@/lib/studio/model";
-import { jobPacketV2Schema } from "@/lib/studio/schema";
-import { workerEndpoint, type WorkerPath } from "@/lib/studio/worker";
+import { jobPacketV2Schema, VOICE_BY_LANGUAGE } from "@/lib/studio/schema";
+import { workerEndpoint } from "@/lib/studio/worker";
 
 type Direction = {
   title: string;
@@ -98,9 +98,8 @@ async function openaiText(
     return { ok: false, error: "The cloud model did not answer.", status: 0 };
   }
   const raw = await res.text();
-  const hidden = raw.split(call.headers.Authorization ?? "").join("[redacted]");
   if (!res.ok) {
-    return { ok: false, error: hidden.slice(0, 280) || `Cloud model returned ${res.status}.`, status: res.status };
+    return { ok: false, error: `Cloud model returned ${res.status}.`, status: res.status };
   }
   try {
     const text = textFromModel(JSON.parse(raw));
@@ -200,8 +199,8 @@ async function workerPost(
     return { ok: false, error: "The worker did not answer." };
   }
   if (res.status >= 300 && res.status < 400) return { ok: false, error: "The worker redirected. Nothing was sent." };
-  const raw = (await res.text()).split(token).join("[redacted]");
-  if (!res.ok) return { ok: false, error: raw.slice(0, 280) || `Worker returned ${res.status}.` };
+  const raw = await res.text();
+  if (!res.ok) return { ok: false, error: `Worker returned ${res.status}.` };
   try {
     return { ok: true, json: JSON.parse(raw) };
   } catch {
@@ -234,8 +233,8 @@ async function workerJson(
     return { ok: false, error: "The worker did not answer." };
   }
   if (res.status >= 300 && res.status < 400) return { ok: false, error: "The worker redirected. Nothing was sent." };
-  const raw = (await res.text()).split(token).join("[redacted]");
-  if (!res.ok) return { ok: false, error: raw.slice(0, 280) || `Worker returned ${res.status}.` };
+  const raw = await res.text();
+  if (!res.ok) return { ok: false, error: `Worker returned ${res.status}.` };
   try {
     return { ok: true, json: JSON.parse(raw) };
   } catch {
@@ -258,7 +257,7 @@ export const directChapter = createServerFn({ method: "POST" })
     const user = containsHan(data.text)
       ? `${lock}Source chapter (translate every Chinese character; do not copy Chinese into the JSON):\n${data.text}`
       : `${lock}${data.text}`;
-    let result = await callActiveAI(data.session, system, user);
+    const result = await callActiveAI(data.session, system, user);
     if (!result.ok) return result;
     let via: "cloud" | "local" = result.via;
     let direction = parseDirection(result.text);
@@ -400,13 +399,12 @@ export const speakLine = createServerFn({ method: "POST" })
     const row = input as { text?: unknown; voice?: unknown; sceneId?: unknown; force?: unknown };
     const text = typeof row?.text === "string" ? row.text.trim() : "";
     if (text.length < 2) throw new Error("Nothing to read.");
-    const voice = typeof row?.voice === "string" ? row.voice : "";
     const sceneId = typeof row.sceneId === "string" ? row.sceneId.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 80) : "";
-    return { text: text.slice(0, 12000), voice, sceneId, force: row.force === true, session: readSession(input) };
+    return { text: text.slice(0, 12000), sceneId, force: row.force === true, session: readSession(input) };
   })
   .handler(async ({ data }): Promise<{ ok: true; audioBase64: string; mimeType: string; audioUrl?: string } | { ok: false; error: string }> => {
     const language = data.session.language;
-    const voice = data.voice.trim() || (language === "hi" ? "hi-IN-MadhurNeural" : "en-US-ChristopherNeural");
+    const voice = VOICE_BY_LANGUAGE[language];
     if (data.session.workerUrl.trim() && data.session.duty !== "key") {
       const result = await workerPost("/api/v1/speak", data.session.workerUrl, data.session.workerToken, {
         text: data.text.slice(0, 700),
@@ -423,7 +421,6 @@ export const speakLine = createServerFn({ method: "POST" })
         if (audio.length >= 100 || audioUrl) return { ok: true, audioBase64: audio, mimeType, ...(audioUrl ? { audioUrl } : {}) };
       }
     }
-    if (data.session.provider === "gemini" && data.session.apiKey && data.session.duty === "key") return geminiSpeak(data.session.apiKey, data.text);
     const edge = await edgeSpeak(data.text, voice);
     if (edge.ok) return edge;
     return { ok: false, error: "Microsoft voice did not answer, and the worker has no saved track yet. Connect the worker so a local male voice can speak." };
@@ -484,24 +481,6 @@ async function edgeSpeak(
   return { ok: true, audioBase64: Buffer.concat(chunks).toString("base64"), mimeType: "audio/mpeg" };
 }
 
-function pcm16ToWav(pcm: Buffer, sampleRate: number): Buffer {
-  const header = Buffer.alloc(44);
-  header.write("RIFF", 0);
-  header.writeUInt32LE(36 + pcm.length, 4);
-  header.write("WAVE", 8);
-  header.write("fmt ", 12);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(1, 22);
-  header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(sampleRate * 2, 28);
-  header.writeUInt16LE(2, 32);
-  header.writeUInt16LE(16, 34);
-  header.write("data", 36);
-  header.writeUInt32LE(pcm.length, 40);
-  return Buffer.concat([header, pcm]);
-}
-
 function speechChunks(text: string): string[] {
   const parts: string[] = [];
   let rest = text.trim();
@@ -518,61 +497,6 @@ function speechChunks(text: string): string[] {
     rest = rest.slice(piece ? cut + 1 : 700).trim();
   }
   return parts;
-}
-
-async function geminiSpeak(
-  apiKey: string,
-  text: string,
-): Promise<{ ok: true; audioBase64: string; mimeType: string } | { ok: false; error: string }> {
-  const pieces = speechChunks(text);
-  if (!pieces.length) return { ok: false, error: "Nothing to read." };
-  const pcmParts: Buffer[] = [];
-  let sampleRate = 24000;
-  for (const piece of pieces) {
-    let res: Response;
-    try {
-      res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${studioConfig.geminiTtsModel}:generateContent`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-          signal: AbortSignal.timeout(45000),
-          body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: piece }] }],
-            generationConfig: {
-              responseModalities: ["AUDIO"],
-              speechConfig: {
-                voiceConfig: { prebuiltVoiceConfig: { voiceName: studioConfig.geminiVoice } },
-              },
-            },
-          }),
-        },
-      );
-    } catch {
-      return { ok: false, error: "Gemini voice did not answer." };
-    }
-    if (!res.ok) return { ok: false, error: `Gemini voice could not read that (${res.status}).` };
-    let body: { candidates?: { content?: { parts?: { inlineData?: { mimeType?: string; data?: string } }[] } }[] };
-    try {
-      body = JSON.parse(await res.text()) as typeof body;
-    } catch {
-      return { ok: false, error: "Gemini voice returned something this studio could not read." };
-    }
-    const inline = body.candidates?.[0]?.content?.parts?.find((part) => part.inlineData?.data)?.inlineData;
-    if (!inline?.data) return { ok: false, error: "Gemini voice returned no audio." };
-    const mime = inline.mimeType || "audio/L16;rate=24000";
-    if (!/l16|pcm|raw/i.test(mime)) {
-      if (!pcmParts.length) {
-        return { ok: true, audioBase64: inline.data, mimeType: mime.split(";")[0] || "audio/wav" };
-      }
-      break;
-    }
-    const rate = mime.match(/rate=(\d+)/i);
-    if (rate) sampleRate = Number(rate[1]) || sampleRate;
-    pcmParts.push(Buffer.from(inline.data, "base64"));
-  }
-  const wav = pcm16ToWav(Buffer.concat(pcmParts), sampleRate);
-  return { ok: true, audioBase64: wav.toString("base64"), mimeType: "audio/wav" };
 }
 
 function asText(value: unknown, max: number): string {
@@ -942,11 +866,6 @@ export const fetchSource = createServerFn({ method: "POST" })
     };
   });
 
-function redact(raw: string, secret: string, max = 280): string {
-  const clean = secret ? raw.split(secret).join("[redacted]") : raw;
-  return clean.slice(0, max);
-}
-
 export const testWorker = createServerFn({ method: "POST" })
   .validator((input: unknown) => {
     const row = input as { url?: unknown; token?: unknown };
@@ -972,8 +891,8 @@ export const testWorker = createServerFn({ method: "POST" })
     if (res.status >= 300 && res.status < 400) {
       return { ok: false, status: res.status, error: "The worker redirected. Health must answer directly." };
     }
-    const body = redact(await res.text(), data.token);
-    if (!res.ok) return { ok: false, status: res.status, body, error: `Worker health returned ${res.status}.` };
+    const body = await res.text();
+    if (!res.ok) return { ok: false, status: res.status, error: `Worker health returned ${res.status}.` };
     return { ok: true, status: res.status, body };
   });
 
@@ -1006,8 +925,8 @@ export const submitJob = createServerFn({ method: "POST" })
       return { ok: false, error: "The worker did not take the job." };
     }
     if (res.status >= 300 && res.status < 400) return { ok: false, error: "The worker redirected. The job was not sent." };
-    const body = redact(await res.text(), data.token);
-    if (!res.ok) return { ok: false, error: body || `Worker returned ${res.status}.` };
+    const body = await res.text();
+    if (!res.ok) return { ok: false, error: `Worker returned ${res.status}.` };
     return { ok: true, status: res.status, body, jobId: readJobId(body) };
   });
 
@@ -1030,9 +949,9 @@ async function workerGet(
     return { ok: false, error: "The worker did not answer." };
   }
   if (res.status >= 300 && res.status < 400) return { ok: false, error: "The worker redirected. Nothing was followed." };
-  const hidden = redact(await res.text(), token, 100_000);
-  if (!res.ok) return { ok: false, error: hidden.slice(0, 280) || `Worker returned ${res.status}.` };
-  return { ok: true, status: res.status, body: hidden, contentType: res.headers.get("content-type") ?? "" };
+  const body = await res.text();
+  if (!res.ok) return { ok: false, error: `Worker returned ${res.status}.` };
+  return { ok: true, status: res.status, body, contentType: res.headers.get("content-type") ?? "" };
 }
 
 export const jobStatus = createServerFn({ method: "POST" })
@@ -1114,15 +1033,14 @@ export async function fetchWorkerMp4(input: unknown): Promise<{ ok: true; bytes:
   }
   if (res.status >= 300 && res.status < 400) return { ok: false, error: "The worker redirected the MP4. Nothing was saved." };
   if (!res.ok) {
-    const body = redact(await res.text(), token);
-    return { ok: false, error: body || `The MP4 request returned ${res.status}.` };
+    return { ok: false, error: `The MP4 request returned ${res.status}.` };
   }
   const bytes = new Uint8Array(await res.arrayBuffer());
   if (bytes.byteLength < 64) return { ok: false, error: "The worker returned an empty video." };
   if (bytes.byteLength > 80_000_000) return { ok: false, error: "That MP4 is larger than 80 MB." };
   const contentType = res.headers.get("content-type") ?? "video/mp4";
   if (/json|text\/html|text\/plain/.test(contentType)) {
-    return { ok: false, error: redact(new TextDecoder().decode(bytes.slice(0, 280)), token) || "The worker did not return a video." };
+    return { ok: false, error: `The worker did not return a video (HTTP ${res.status}).` };
   }
   return { ok: true, bytes, contentType: contentType.split(";")[0] || "video/mp4" };
 }
@@ -1179,8 +1097,8 @@ export const uploadYoutube = createServerFn({ method: "POST" })
     } catch {
       return { ok: false, error: "The worker did not upload the video." };
     }
-    const raw = (await res.text()).split(data.accessToken).join("[redacted]").split(data.token).join("[redacted]");
-    if (!res.ok) return { ok: false, error: raw.slice(0, 280) || `YouTube upload returned ${res.status}.` };
+    const raw = await res.text();
+    if (!res.ok) return { ok: false, error: `YouTube upload returned ${res.status}.` };
     try {
       const json = JSON.parse(raw) as { watchUrl?: unknown };
       if (typeof json.watchUrl === "string" && /^https:\/\/www\.youtube\.com\/watch\?v=[\w-]{6,}$/.test(json.watchUrl)) {
@@ -1540,7 +1458,7 @@ export const readPanelText = createServerFn({ method: "POST" })
 
 export function sanitizeChapterContent(text: string): string {
   if (!text) return "";
-  return text.replace(/cl\.adform\.net[^\s]*/gi, "").replace(/This is a cached snapshot.*?probe/gis, "").replace(/Ad Blocker Detected.*?content\./gis, "").replace(/(?:footer|copyright|about us|discord|patreon).*$/gim, "").replace(/\n\s*\n/g, "\n").trim();
+  return cleanScrapedChapter(text.replace(/(?:footer|copyright|about us|discord|patreon).*$/gim, ""));
 }
 
 export function forceEnglishTranslation(text: string): string {

@@ -7,9 +7,6 @@ export function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-const MALE = /male|\bguy\b|david|ravi|prabhat|madhur|daniel|fred|rishi|arthur|aaron|alex|george|charon|hindi india/i;
-const FEMALE = /female|woman|zira|samantha|veena|heera|eva|susan|salli|victoria|fiona|lekha|neerja|google हिन्दी/i;
-
 export function primeSpeechUnlock(): void {
   if (typeof window === "undefined" || !window.speechSynthesis) return;
   try {
@@ -47,22 +44,12 @@ export function loadVoices(timeoutMs = 900): Promise<SpeechSynthesisVoice[]> {
   });
 }
 
-function voiceScore(voice: SpeechSynthesisVoice, hindi: boolean): number {
-  const blob = `${voice.lang} ${voice.name}`;
-  let score = 0;
-  if (hindi ? /^hi/i.test(voice.lang) : /^(en|hi)/i.test(voice.lang)) score += 4;
-  if (MALE.test(blob) && !FEMALE.test(blob)) score += 3;
-  if (voice.default) score += 1;
-  if (voice.localService) score += 1;
-  if (FEMALE.test(blob)) score -= 2;
-  return score;
-}
-
-/** Prefer a male voice, but always return some voice so Android does not dead-end. */
+/** Use only the requested neural voice when the device has it installed. */
 export function chooseVoice(voices: SpeechSynthesisVoice[], sample: string): SpeechSynthesisVoice | null {
-  if (!voices.length) return null;
   const hindi = /[\u0900-\u097F]/.test(sample);
-  return [...voices].sort((a, b) => voiceScore(b, hindi) - voiceScore(a, hindi))[0] ?? null;
+  const expectedName = hindi ? /madhur/i : /christopher/i;
+  const expectedLocale = hindi ? /^hi(?:-|$)/i : /^en-US(?:-|$)/i;
+  return voices.find((voice) => expectedName.test(voice.name) && expectedLocale.test(voice.lang)) ?? null;
 }
 
 export function pickMaleVoice(): SpeechSynthesisVoice | null {
@@ -93,14 +80,18 @@ export function speakOnDevice(text: string, voice: SpeechSynthesisVoice | null):
   if (typeof window === "undefined" || !window.speechSynthesis) {
     return Promise.reject(new Error("This phone has no speech engine."));
   }
+  const hindi = /[\u0900-\u097F]/.test(text);
+  const expectedName = hindi ? /madhur/i : /christopher/i;
+  const expectedLocale = hindi ? /^hi(?:-|$)/i : /^en-US(?:-|$)/i;
+  if (!voice || !expectedName.test(voice.name) || !expectedLocale.test(voice.lang)) {
+    return Promise.reject(new Error("The requested male voice is not installed on this phone."));
+  }
   const pieces = speechChunks(text);
   if (!pieces.length) return Promise.resolve();
   const synth = window.speechSynthesis;
-  const hindi = /[\u0900-\u097F]/.test(text);
   return new Promise((resolve, reject) => {
     let index = 0;
     let settled = false;
-    let retriedBare = false;
     const finish = () => {
       if (settled) return;
       settled = true;
@@ -111,29 +102,20 @@ export function speakOnDevice(text: string, voice: SpeechSynthesisVoice | null):
       settled = true;
       reject(new Error(message));
     };
-    const speakPiece = (bare: boolean) => {
+    const speakPiece = () => {
       const utterance = new SpeechSynthesisUtterance(pieces[index] ?? "");
-      if (!bare && voice) {
-        utterance.voice = voice;
-        if (voice.lang) utterance.lang = voice.lang;
-      } else if (!bare && hindi) {
-        utterance.lang = "hi-IN";
-      }
+      utterance.voice = voice;
+      utterance.lang = voice.lang;
       utterance.rate = 0.96;
       utterance.onend = () => {
         index += 1;
         if (index >= pieces.length) finish();
-        else speakPiece(false);
+        else speakPiece();
       };
       utterance.onerror = (event) => {
         const code = event.error;
         if (code === "interrupted" || code === "canceled") {
           finish();
-          return;
-        }
-        if (!retriedBare && (code === "synthesis-failed" || code === "voice-unavailable" || code === "language-unavailable" || code === "not-allowed" || code === "audio-busy")) {
-          retriedBare = true;
-          window.setTimeout(() => speakPiece(true), 60);
           return;
         }
         fail("This phone stopped the reading.");
@@ -145,7 +127,7 @@ export function speakOnDevice(text: string, voice: SpeechSynthesisVoice | null):
         fail("This phone stopped the reading.");
       }
     };
-    speakPiece(false);
+    speakPiece();
   });
 }
 

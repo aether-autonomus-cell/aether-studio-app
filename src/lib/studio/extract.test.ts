@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { extractPanels, htmlToText, sanitizeNovelText } from "./extract.ts";
+import { cleanScrapedChapter, extractPanels, htmlToText, sanitizeNovelText } from "./extract.ts";
 
 test("page text is not clipped at 8000 characters", () => {
   const body = `Rain ${"lantern ".repeat(1600)}`;
@@ -53,6 +53,19 @@ test("glued site chrome and html entities do not survive", () => {
 test("short site labels on their own lines are dropped", () => {
   const clean = sanitizeNovelText(["Novel", "Web", "MTL", "The spear stayed lowered.", "Machine translation"].join("\n"));
   assert.equal(clean, "The spear stayed lowered.");
+});
+
+test("scraped text omits cookies and ad-block warnings but keeps the chapter", () => {
+  const raw = [
+    "Cookie: session=private-value; Path=/",
+    "Set-Cookie: auth=private-value; HttpOnly",
+    "Ad Blocker Detected. Please disable your ad blocker to view content.",
+    "This is a cached snapshot from the probe service.",
+    "The bridge stayed open while Ren counted the rain.",
+  ].join("\n");
+  const clean = cleanScrapedChapter(raw);
+  assert.doesNotMatch(clean, /Cookie:|Set-Cookie:|private-value|Ad Blocker|disable your ad blocker|cached snapshot|probe service/i);
+  assert.match(clean, /bridge stayed open/);
 });
 
 test("a panel keeps bubble text apart from the line near the face", () => {

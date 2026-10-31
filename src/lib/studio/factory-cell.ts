@@ -430,7 +430,7 @@ def extract_html(html, page):
     import urllib.parse
     title_m = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
     title = re.sub("<[^>]+>", " ", title_m.group(1) if title_m else "")
-    title = re.sub(r"\\s+", " ", title).strip()[:180]
+    title = clean_scraper_text(re.sub(r"\\s+", " ", title)).strip()[:180]
     body = re.sub(r"<script[\\s\\S]*?</script>", " ", html, flags=re.I)
     body = re.sub(r"<style[\\s\\S]*?</style>", " ", body, flags=re.I)
     panels = []
@@ -450,14 +450,21 @@ def extract_html(html, page):
         panels.append({"src": src, "bubble": alt[:180], "aside": after, "text": (alt + " " + after).strip()[:500]})
         if len(panels) >= 80:
             break
-    text = re.sub("<[^>]+>", "\\n", body)
+    text = clean_scraper_text(re.sub("<[^>]+>", "\\n", body))
     lines = []
     for line in text.splitlines():
         clean = re.sub(r"\\s+", " ", line).strip()
-        if not clean or re.search(r"next chapter|previous chapter|wtr-lab|sign in", clean, re.I):
+        if not clean or re.search(r"next chapter|previous chapter|wtr-lab|sign in|cookie|set-cookie|ad[ -]?block|enable javascript and cookies", clean, re.I):
             continue
         lines.append(clean)
     return title, "\\n".join(lines)[:20000], panels
+
+def clean_scraper_text(text):
+    text = re.sub(r"(?im)^[ \\t]*(?:set-cookie|cookie)\\s*:[^\\n]*", "", text)
+    text = re.sub(r"This is a cached snapshot[\\s\\S]*?\\bprobe\\b", " ", text, flags=re.I)
+    text = re.sub(r"Ad Blocker Detected[\\s\\S]*?\\bcontent[.!]?", " ", text, flags=re.I)
+    text = re.sub(r"(?:please\\s+)?(?:disable|turn off)\\s+(?:your\\s+)?ad[\\s-]?block(?:er)?[^.!?\\n]*[.!?]?", " ", text, flags=re.I)
+    return text
 
 def run_fetch(job_id, urls, cookie):
     import requests
@@ -501,7 +508,7 @@ def render_job(job_id, packet):
         vertical = aspect != "16:9"
         W, H = (1080, 1920) if vertical else (1920, 1080)
         revoice = packet.get("pass") == "revoice"
-        voice_id = (packet.get("voice") or "").strip() or ("hi-IN-MadhurNeural" if packet.get("language") == "hi" else "en-US-ChristopherNeural")
+        voice_id = "hi-IN-MadhurNeural" if packet.get("language") == "hi" else "en-US-ChristopherNeural"
         chapters = packet.get("chapters") or []
         scenes = []
         for chapter in chapters:
@@ -686,10 +693,12 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+@app.get("/health")
 @app.get("/api/v1/health")
 def health():
     return {"ok": True, "gpus": GPU_COUNT, "names": GPU_NAMES, "engine": "aether-manhua", "local_ai": True}
 
+@app.post("/api/generate")
 @app.post("/api/v1/llm")
 async def llm(request: Request):
     if not allowed(request.headers):
@@ -703,6 +712,7 @@ async def llm(request: Request):
 async def direct(request: Request):
     return await llm(request)
 
+@app.post("/render")
 @app.post("/api/v1/jobs")
 async def create_job(request: Request):
     if not allowed(request.headers):
@@ -782,6 +792,7 @@ async def paint(request: Request):
     mode = paint_prompt(payload.get("prompt") or "panel", dest, (832, 1216), reference)
     return {"imageBase64": base64.b64encode(dest.read_bytes()).decode(), "mimeType": "image/png", "fallback": mode == "pollinations", "engine": mode, "referenceUsed": bool(reference)}
 
+@app.post("/tts")
 @app.post("/api/v1/speak")
 async def speak(request: Request):
     if not allowed(request.headers):
@@ -789,7 +800,7 @@ async def speak(request: Request):
     payload = await request.json()
     text = (payload.get("text") or " ")[:700]
     lang = "hi" if payload.get("language") == "hi" else "en"
-    voice = payload.get("voice") or ("hi-IN-MadhurNeural" if lang == "hi" else "en-US-ChristopherNeural")
+    voice = "hi-IN-MadhurNeural" if lang == "hi" else "en-US-ChristopherNeural"
     sid = safe_id(payload.get("sceneId") or "line")
     dest = VOICE_DIR / voice_file_name(sid, lang, voice)
     if not (dest.exists() and dest.stat().st_size > 200 and not payload.get("force")):
@@ -809,6 +820,7 @@ def voice_file(name: str, request: Request):
         raise HTTPException(404, "voice not saved")
     return FileResponse(path, media_type="audio/mpeg")
 
+@app.post("/extract")
 @app.post("/api/v1/fetch")
 async def start_fetch(request: Request):
     if not allowed(request.headers):

@@ -90,7 +90,6 @@ export function detectLanguage(text: string): Language {
   return /[\u0900-\u097F]/.test(text) ? "hi" : "en";
 }
 
-export function voiceFor(language: Language, override?: string): string {
-  const chosen = override?.trim();
-  return chosen || VOICE_BY_LANGUAGE[language];
+export function voiceFor(language: Language): string {
+  return VOICE_BY_LANGUAGE[language];
 }
