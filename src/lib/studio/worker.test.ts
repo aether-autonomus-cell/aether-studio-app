@@ -12,6 +12,22 @@ test("health is origin plus /api/v1/health", () => {
 
 test("a mounted prefix is kept", () => {
   assert.equal(workerEndpoint("https://example.com/aether/", "/api/v1/health").href, "https://example.com/aether/api/v1/health");
+  assert.equal(workerEndpoint("https://example.com/aether/api/v1/health///", "/api/v1/jobs").href, "https://example.com/aether/api/v1/jobs");
+});
+
+test("the Colab factory routes resolve beneath a worker URL with trailing slashes", () => {
+  const paths = [
+    "/api/v1/health",
+    "/api/v1/llm",
+    "/api/v1/paint",
+    "/api/v1/speak",
+    "/api/v1/jobs",
+    "/api/v1/fetch",
+    "/api/v1/youtube-upload",
+  ];
+  for (const path of paths) {
+    assert.equal(workerEndpoint("https://worker.example.com///", path).href, `https://worker.example.com${path}`);
+  }
 });
 
 test("compatibility routes build clean worker URLs", () => {

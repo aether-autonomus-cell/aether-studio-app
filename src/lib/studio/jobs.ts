@@ -38,7 +38,18 @@ export function readJobId(body: string): string | null {
   try {
     const json = JSON.parse(body) as Record<string, unknown>;
     const nested = json.job && typeof json.job === "object" ? (json.job as Record<string, unknown>) : null;
-    return asId(json.id) ?? asId(json.job_id) ?? asId(json.jobId) ?? (nested ? asId(nested.id) ?? asId(nested.job_id) : null);
+    return (
+      asId(json.id) ??
+      asId(json.job_id) ??
+      asId(json.jobId) ??
+      asId(json.jobID) ??
+      asId(json.task_id) ??
+      asId(json.taskId) ??
+      (typeof json.job === "string" ? asId(json.job) : null) ??
+      (nested
+        ? asId(nested.id) ?? asId(nested.job_id) ?? asId(nested.jobId) ?? asId(nested.task_id) ?? asId(nested.taskId)
+        : null)
+    );
   } catch {
     return null;
   }

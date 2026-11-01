@@ -1,7 +1,18 @@
 import { sanitizeNovelText } from "./extract.ts";
+import { locationMatches } from "./bible.ts";
 import { DEFAULT_NEGATIVE, detectLanguage, jobPacketV2Schema, voiceFor, type JobPacketV2, type PacketChapter, type PacketScene } from "./schema.ts";
 
 export type OutfitChange = { chapter: number; outfit: string };
+
+export type ImageModel = "nano-banana" | "nano-banana-pro" | "colab-painter" | "hf-flux-schnell";
+
+export type LocationReference = {
+  id: string;
+  name: string;
+  description: string;
+  starLocked: boolean;
+  imageUrl?: string;
+};
 
 export type Character = {
   id: string;
@@ -19,6 +30,7 @@ export type Character = {
   outfits?: OutfitChange[];
   /** First accepted panel that shows this face. A language switch must not clear it. */
   faceUrl?: string;
+  starLocked?: boolean;
 };
 
 export type Scene = {
@@ -112,6 +124,8 @@ export type Project = {
   readyHi?: boolean;
   /** Hugging Face checkpoint the worker should load. Empty uses the cell default. */
   imageRepo?: string;
+  imageModel?: ImageModel;
+  locations?: LocationReference[];
 };
 
 export const SAMPLE_TEXT = `The Lantern Debt
@@ -152,6 +166,27 @@ export const SAMPLE: Project = {
       look: "woman, silver-white hair in a high knot, black layered armor, long spear, severe calm face",
     },
   ],
+  locations: [
+    {
+      id: "old-bridge",
+      name: "Old Bridge",
+      description: "Rain-soaked stone bridge with warm paper lanterns over dark water.",
+      starLocked: true,
+    },
+    {
+      id: "cedar-mist",
+      name: "Cedar mist",
+      description: "A misty cedar forest at dawn, with fog parting around the path.",
+      starLocked: false,
+    },
+    {
+      id: "palace-gate",
+      name: "Palace gate",
+      description: "A towering palace gate split by cold lightning.",
+      starLocked: false,
+    },
+  ],
+  imageModel: "nano-banana",
   timeline: [
     "Bridge: rain, lanterns, robe already torn, Ren will not face the water.",
     "Jade: pendant cracked and glowing, blood on the thumb.",
@@ -510,7 +545,7 @@ export function projectFromChapters(
 
 export type JobPacket = JobPacketV2;
 
-function tilesFor(scene: Scene, characters: Character[]): PacketScene["tiles"] {
+function tilesFor(scene: Scene, characters: Character[], locations: LocationReference[] = []): PacketScene["tiles"] {
   const blob = `${scene.speaker}\n${scene.caption}\n${scene.dialogue}\n${scene.state}`;
   const named = characters.filter((character) => blob.includes(character.name));
   const speaker = characters.find((character) => character.name === scene.speaker);
@@ -518,9 +553,13 @@ function tilesFor(scene: Scene, characters: Character[]): PacketScene["tiles"] {
   const prompt =
     scene.imagePrompt.trim() ||
     `Vertical illustrated comic panel, no text, no letters. ${scene.caption || scene.dialogue || scene.state || "Open panel"}`;
+  const locationLocks = locations
+    .filter((location) => location.starLocked && locationMatches(blob, location.name))
+    .map((location) => `Locked location ${location.name}: ${location.description}`)
+    .join("\n");
   return [
     {
-      prompt,
+      prompt: [prompt, locationLocks].filter(Boolean).join("\n"),
       negative: DEFAULT_NEGATIVE,
       characters: ids,
       vessel_id: speaker?.id ?? ids[0] ?? "",
@@ -528,18 +567,22 @@ function tilesFor(scene: Scene, characters: Character[]): PacketScene["tiles"] {
   ];
 }
 
-function faceReference(scene: Scene, characters: Character[]): string | undefined {
+function faceReference(scene: Scene, characters: Character[], locations: LocationReference[] = []): string | undefined {
   const blob = `${scene.speaker}\n${scene.caption}\n${scene.dialogue}\n${scene.imagePrompt}`;
+  const pinned = characters.find((character) => character.starLocked && character.faceUrl && blob.includes(character.name));
   const named = characters.find((character) => character.faceUrl && character.name && blob.includes(character.name));
   const only = characters.length === 1 ? characters[0] : undefined;
-  const face = named?.faceUrl || only?.faceUrl || "";
+  const location = locations.find(
+    (item) => item.starLocked && item.imageUrl && locationMatches(blob, item.name),
+  );
+  const face = pinned?.faceUrl || named?.faceUrl || only?.faceUrl || location?.imageUrl || "";
   if (!face || face.length > 400_000) return undefined;
   return face;
 }
 
-function scenePacket(scene: Scene, characters: Character[]): PacketScene {
+function scenePacket(scene: Scene, characters: Character[], locations: LocationReference[] = []): PacketScene {
   const image = scene.imageUrl && scene.imageUrl.length > 0 && scene.imageUrl.length <= 1_200_000 ? scene.imageUrl : undefined;
-  const reference = faceReference(scene, characters);
+  const reference = faceReference(scene, characters, locations);
   return {
     id: scene.id,
     caption: scene.caption,
@@ -549,11 +592,11 @@ function scenePacket(scene: Scene, characters: Character[]): PacketScene {
     ...(image ? { image_url: image } : {}),
     ...(scene.holdSec && scene.holdSec > 0 ? { hold_sec: scene.holdSec } : {}),
     ...(reference ? { reference } : {}),
-    tiles: tilesFor(scene, characters),
+    tiles: tilesFor(scene, characters, locations),
   };
 }
 
-function chapterPacket(chapter: Chapter): PacketChapter {
+function chapterPacket(chapter: Chapter, locations: LocationReference[] = []): PacketChapter {
   return {
     index: chapter.index,
     title: chapter.title.trim() || `Chapter ${chapter.index}`,
@@ -566,7 +609,7 @@ function chapterPacket(chapter: Chapter): PacketChapter {
       vessel,
       vessel_id: id,
     })),
-    scenes: chapter.scenes.map((scene) => scenePacket(scene, chapter.characters)),
+    scenes: chapter.scenes.map((scene) => scenePacket(scene, chapter.characters, locations)),
   };
 }
 
@@ -590,7 +633,7 @@ export function projectWithAbsoluteArt(project: Project, origin: string): Projec
 export function jobPacket(project: Project, pass: "assemble" | "revoice" = "assemble"): JobPacket {
   const language = project.language ?? detectLanguage(`${project.text}\n${project.narration}`);
   const chapters: PacketChapter[] = project.chapters?.length
-    ? project.chapters.map(chapterPacket)
+    ? project.chapters.map((chapter) => chapterPacket(chapter, project.locations || []))
     : [
         chapterPacket({
           index: 1,
@@ -599,7 +642,7 @@ export function jobPacket(project: Project, pass: "assemble" | "revoice" = "asse
           narration: project.narration,
           characters: project.characters,
           scenes: project.scenes,
-        }),
+        }, project.locations || []),
       ];
   return jobPacketV2Schema.parse({
     version: 2,

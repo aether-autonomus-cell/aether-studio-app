@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Clapperboard, Factory, MessageCircle, Mic, ScrollText, Settings, Sparkles, Youtube } from "lucide-react";
+import { Clapperboard, Factory, MessageCircle, Mic, ScrollText, Settings, Sparkles, Star, Youtube } from "lucide-react";
 import {
   chatTurn,
   checkPanel,
@@ -64,6 +64,8 @@ import {
   projectWithAbsoluteArt,
   youtubePrivacy,
   type Character,
+  type ImageModel,
+  type LocationReference,
   type Project,
   type Scene,
 } from "@/lib/studio/model";
@@ -81,6 +83,12 @@ const EMPTY_SLOT: ChannelSlot = { token: "", email: "", channel: "" };
 const voiceCache = new Map<string, string>();
 
 const PROVIDER_IDS = Object.keys(PROVIDER_PRESETS) as CloudProvider[];
+const IMAGE_MODELS: { id: ImageModel; label: string; detail: string }[] = [
+  { id: "nano-banana", label: "Nano Banana 2.1 · Gemini Flash", detail: "Gemini image generation with approved reference images." },
+  { id: "nano-banana-pro", label: "Nano Banana Pro · Imagen 3", detail: "Imagen 3 image generation through the Gemini API." },
+  { id: "colab-painter", label: "Colab GPU Painter · Animagine-XL / Flux", detail: "GPU painting through the connected factory worker." },
+  { id: "hf-flux-schnell", label: "Hugging Face · FLUX.1-schnell", detail: "Free-tier inference; access and rate limits depend on Hugging Face." },
+];
 
 function masterSrc(workerUrl: string, token: string, language: ReelLanguage): string | null {
   try {
@@ -136,6 +144,36 @@ async function copyText(value: string): Promise<boolean> {
       return false;
     }
   }
+}
+
+function trimGeneratedImage(source: string, aspect: Aspect): Promise<string> {
+  if (!source.startsWith("data:image/")) return Promise.resolve(source);
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      const targetRatio = aspect === "16:9" ? 16 / 9 : 9 / 16;
+      const insetX = image.naturalWidth * 0.025;
+      const insetY = image.naturalHeight * 0.025;
+      let cropWidth = image.naturalWidth - insetX * 2;
+      let cropHeight = image.naturalHeight - insetY * 2;
+      if (cropWidth / cropHeight > targetRatio) cropWidth = cropHeight * targetRatio;
+      else cropHeight = cropWidth / targetRatio;
+      const sx = (image.naturalWidth - cropWidth) / 2;
+      const sy = (image.naturalHeight - cropHeight) / 2;
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(cropWidth);
+      canvas.height = Math.round(cropHeight);
+      const context = canvas.getContext("2d");
+      if (!context) {
+        reject(new Error("The browser could not prepare the generated image."));
+        return;
+      }
+      context.drawImage(image, sx, sy, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/png"));
+    };
+    image.onerror = () => reject(new Error("The generated image could not be decoded."));
+    image.src = source;
+  });
 }
 
 function panelsProject(title: string, panels: { src: string; text: string; bubble?: string; aside?: string }[]): Project {
@@ -238,6 +276,82 @@ function googleAccounts():
   return (window as unknown as { google?: ReturnType<typeof googleAccounts> }).google;
 }
 
+async function uploadYoutubeBlob(input: {
+  blob: Blob;
+  token: string;
+  title: string;
+  description: string;
+  tags: string[];
+  privacy: "public" | "unlisted" | "private";
+  language: ReelLanguage;
+  captions: string;
+}): Promise<{ watchUrl: string; captionsUploaded: boolean }> {
+  const start = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.token}`,
+      "Content-Type": "application/json",
+      "X-Upload-Content-Length": String(input.blob.size),
+      "X-Upload-Content-Type": "video/mp4",
+    },
+    body: JSON.stringify({
+      snippet: {
+        title: input.title.slice(0, 100),
+        description: input.description.slice(0, 5000),
+        tags: input.tags.slice(0, 15),
+        categoryId: "1",
+        defaultLanguage: input.language,
+      },
+      status: { privacyStatus: input.privacy },
+    }),
+  });
+  if (!start.ok) throw new Error(`YouTube upload setup returned ${start.status}.`);
+  const uploadUrl = start.headers.get("location");
+  if (!uploadUrl) throw new Error("YouTube did not provide a resumable upload URL.");
+  const target = new URL(uploadUrl);
+  if (target.protocol !== "https:" || target.hostname !== "www.googleapis.com") {
+    throw new Error("YouTube returned an unexpected upload destination.");
+  }
+  const uploaded = await fetch(target, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${input.token}`, "Content-Type": "video/mp4" },
+    body: input.blob,
+  });
+  if (!uploaded.ok) throw new Error(`YouTube video upload returned ${uploaded.status}.`);
+  const video = (await uploaded.json()) as { id?: unknown };
+  if (typeof video.id !== "string" || !/^[\w-]{6,}$/.test(video.id)) {
+    throw new Error("YouTube uploaded the video but returned no video id.");
+  }
+
+  const form = new FormData();
+  form.append(
+    "metadata",
+    new Blob(
+      [
+        JSON.stringify({
+          snippet: {
+            videoId: video.id,
+            language: input.language,
+            name: input.language === "hi" ? "Hindi captions" : "English captions",
+            isDraft: false,
+          },
+        }),
+      ],
+      { type: "application/json" },
+    ),
+  );
+  form.append("file", new Blob([input.captions], { type: "application/x-subrip" }), `${input.language}.srt`);
+  const captions = await fetch("https://www.googleapis.com/upload/youtube/v3/captions?part=snippet&uploadType=multipart", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${input.token}` },
+    body: form,
+  });
+  return {
+    watchUrl: `https://www.youtube.com/watch?v=${video.id}`,
+    captionsUploaded: captions.ok,
+  };
+}
+
 function loadGis(): Promise<void> {
   if (googleAccounts()?.accounts?.oauth2) return Promise.resolve();
   return new Promise((resolve, reject) => {
@@ -303,12 +417,17 @@ export function StudioApp() {
   const [customModel, setCustomModel] = useState("");
   const [customBase, setCustomBase] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [imageApiKey, setImageApiKey] = useState("");
+  const [hfToken, setHfToken] = useState("");
   const [revealKey, setRevealKey] = useState(false);
   const [apiBadge, setApiBadge] = useState<string | null>(null);
   const [workerBadge, setWorkerBadge] = useState<string | null>(null);
   const [localModel, setLocalModel] = useState<LocalMode>("gguf");
   const [duty, setDuty] = useState<Duty>("split");
   const [imageRepo, setImageRepo] = useState("");
+  const [imageModel, setImageModel] = useState<ImageModel>("nano-banana");
+  const [locationNameDraft, setLocationNameDraft] = useState("");
+  const [locationDescriptionDraft, setLocationDescriptionDraft] = useState("");
   const [language, setLanguage] = useState<"hi" | "en">("en");
   const [masters, setMasters] = useState<{ en: boolean; hi: boolean }>({ en: false, hi: false });
   const [previewSeen, setPreviewSeen] = useState(false);
@@ -358,6 +477,7 @@ export function StudioApp() {
       if (saved.bible) setBible(saved.bible);
       if (saved.aspect === "16:9" || saved.aspect === "9:16") setAspect(saved.aspect);
       if (saved.imageRepo) setImageRepo(saved.imageRepo);
+      if (saved.imageModel) setImageModel(saved.imageModel);
       const flags: Record<string, true> = {};
       for (const scene of saved.scenes) {
         if (hasRequestedVoice(scene.voiceEn, "en")) flags[`${scene.id}:en`] = true;
@@ -371,8 +491,8 @@ export function StudioApp() {
 
   useEffect(() => {
     if (!hydrated.current) return;
-    saveProject({ ...project, imageRepo: imageRepo.trim() || project.imageRepo });
-  }, [project, imageRepo]);
+    saveProject({ ...project, imageRepo: imageRepo.trim() || project.imageRepo, imageModel });
+  }, [project, imageRepo, imageModel]);
 
   useEffect(() => {
     return () => {
@@ -458,7 +578,7 @@ export function StudioApp() {
             speaker: scene.speaker,
             state: scene.state,
             chapter: scene.chapter || 0,
-            lock: lookLockForScene(scene, current.characters),
+            lock: lookLockForScene(scene, current.characters, current.locations || []),
             ...session(),
           },
         });
@@ -499,6 +619,33 @@ export function StudioApp() {
       );
       return { ...current, characters, ...(structured ? { bible: bibleDocument(characters) } : {}) };
     });
+  }
+
+  function addLocationReference() {
+    const name = locationNameDraft.trim();
+    const description = locationDescriptionDraft.trim();
+    if (!name || !description) {
+      setError("Add both a location name and its visual lock.");
+      return;
+    }
+    setProject((current) => {
+      const locations = [...(current.locations || [])];
+      const existing = locations.findIndex((item) => item.name.toLowerCase() === name.toLowerCase());
+      const next: LocationReference = {
+        id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-") || `location-${locations.length + 1}`,
+        name: name.slice(0, 60),
+        description: description.slice(0, 360),
+        starLocked: existing >= 0 ? locations[existing]!.starLocked : true,
+        ...(existing >= 0 ? { imageUrl: locations[existing]!.imageUrl } : {}),
+      };
+      if (existing >= 0) locations[existing] = next;
+      else locations.push(next);
+      return { ...current, locations };
+    });
+    setLocationNameDraft("");
+    setLocationDescriptionDraft("");
+    setError(null);
+    setNotice(`${name} reference saved.`);
   }
 
   function absVoice(path: string): string {
@@ -581,8 +728,8 @@ export function StudioApp() {
     }
   }
 
-  async function onPickLanguage(next: ReelLanguage) {
-    if (next === language || busy) return;
+  async function onPickLanguage(next: ReelLanguage, fromAgent = false) {
+    if (next === language || (busy && !fromAgent)) return;
     setError(null);
     voiceRun.current += 1;
     const remembered = rememberScript(project, language);
@@ -671,6 +818,7 @@ export function StudioApp() {
       return false;
     }
     const parts: Project[] = [];
+    let recoveredPlan = false;
     const call = session();
     for (let index = 0; index < chunks.length; index += 1) {
       setBusy(chunks.length > 1 ? `Directing part ${index + 1} of ${chunks.length}` : "Directing the manhua explanation");
@@ -679,6 +827,7 @@ export function StudioApp() {
         setError(chunks.length > 1 ? `Part ${index + 1}: ${result.error}` : result.error);
         return false;
       }
+      recoveredPlan ||= result.recovered === true;
       parts.push({
         ...result.direction,
         source: "grok",
@@ -691,12 +840,19 @@ export function StudioApp() {
     const cast = mergeCast(merged.characters, gleanCast(cleaned, merged.characters));
     const doc = (lock || bible).trim() || bibleDocument(cast);
     if (doc) setBible(doc);
-    setProject(stamp({ ...merged, characters: cast, bible: doc || merged.bible }, parts.find((part) => part.hook)?.hook));
+    setProject(
+      stamp(
+        { ...merged, characters: cast, bible: doc || merged.bible, locations: project.locations || [] },
+        parts.find((part) => part.hook)?.hook,
+      ),
+    );
     setDraft(cleaned);
     setNotice(
-      chunks.length > 1
-        ? `Explanation written in ${chunks.length} parts. ${merged.scenes.length} panels, no four-panel cap.`
-        : `AI Manhua Recap Director wrote ${merged.scenes.length} panels in ${language === "hi" ? "Hindi" : "English"}.`,
+      recoveredPlan
+        ? `The response needed repair, so the chapter was split into ${merged.scenes.length} usable beats and its cast was recovered.`
+        : chunks.length > 1
+          ? `Explanation written in ${chunks.length} parts. ${merged.scenes.length} panels, no four-panel cap.`
+          : `AI Manhua Recap Director wrote ${merged.scenes.length} panels in ${language === "hi" ? "Hindi" : "English"}.`,
     );
     setTab("forge");
     return true;
@@ -888,97 +1044,141 @@ export function StudioApp() {
     }
   }
 
-  async function onPaint(onlyId?: string) {
+  async function onPaint(onlyIds?: string[], parallelism = 1): Promise<boolean> {
     setError(null);
     const prepared = await writeMissingPrompts(project);
-    if (!prepared) return;
+    if (!prepared) return false;
+    const requested = onlyIds ? new Set(onlyIds) : null;
     const targets = prepared.scenes.filter((scene) => {
       if (scene.locked) return false;
-      if (onlyId) return scene.id === onlyId;
+      if (requested) return requested.has(scene.id);
       return !scene.imageUrl;
     });
     if (!targets.length) {
       setNotice(prepared.scenes.some((scene) => scene.locked) ? "Source panels stay as they are. Nothing was redrawn." : "The open panels are already painted.");
       setBusy(null);
-      return;
+      return true;
     }
     const call = session();
     let cursor = prepared;
+    const concurrency = Math.min(5, Math.max(1, Math.floor(parallelism)));
     let usedFallback = false;
-    for (let index = 0; index < targets.length; index += 1) {
-      const scene = cursor.scenes.find((item) => item.id === targets[index]?.id) ?? targets[index];
-      if (!scene) continue;
-      let accepted: string | null = null;
-      let note = "";
-      const tries = Math.min(3, Math.max(1, Number(retries) || 3));
-      for (let attempt = 1; attempt <= tries; attempt += 1) {
-        setBusy(
-          attempt === 1
-            ? `Painting panel ${index + 1} of ${targets.length}`
-            : `Panel ${index + 1} did not match. Retry ${attempt} of ${tries}. Later panels are waiting.`,
-        );
-        try {
-          const lock = lookLockForScene(scene, cursor.characters);
-          const result = await paintPanel({
-            data: {
-              prompt: [scene.imagePrompt, lock].filter(Boolean).join("\n"),
-              reference: faceReferenceFor(scene, cursor.characters),
-              repo: imageRepo.trim(),
-              ...call,
-            },
-          });
-          if (!result.ok) {
-            setError(result.error);
-            setBusy(null);
-            return;
-          }
-          if (result.fallback) usedFallback = true;
-          const check = await checkPanel({ data: { prompt: scene.imagePrompt, imageUrl: result.url, ...call } });
-          if (check.ok && check.match === "no" && attempt < tries) {
-            note = check.note || "Face or scene did not match.";
-            continue;
-          }
-          accepted = result.url;
-          note = check.ok ? check.note : "";
-          if (check.ok && check.match === "no") note = note || `Still off after ${tries} tries.`;
-          break;
-        } catch (err) {
-          setError(err instanceof Error ? err.message : "Painting stopped.");
-          setBusy(null);
-          return;
-        }
-      }
-      if (!accepted) {
-        setError("That panel failed three times. The queue is stopped. Pictures already accepted were kept.");
-        setBusy(null);
-        return;
-      }
-      const failed = note.startsWith("Still off");
-      const mentioned = cursor.characters.filter((character) =>
-        [scene.caption, scene.dialogue, scene.speaker, scene.imagePrompt].join("\n").includes(character.name),
+    for (let start = 0; start < targets.length; start += concurrency) {
+      const batch = targets.slice(start, start + concurrency);
+      setBusy(
+        concurrency > 1
+          ? `Painting batch ${Math.floor(start / concurrency) + 1} · ${batch.length} panels in parallel`
+          : `Painting panel ${start + 1} of ${targets.length}`,
       );
-      const faceOwner = mentioned.length === 1 ? mentioned[0] : undefined;
-      cursor = {
-        ...cursor,
-        characters: cursor.characters.map((character) => {
-          if (character.faceUrl || !faceOwner || character.id !== faceOwner.id) return character;
-          return { ...character, faceUrl: accepted };
+      const outcomes = await Promise.all(
+        batch.map(async (target): Promise<
+          | { ok: true; scene: Scene; url: string; note: string; failed: boolean; tries: number }
+          | { ok: false; scene: Scene; error: string }
+        > => {
+          const scene = cursor.scenes.find((item) => item.id === target.id) ?? target;
+          const tries = Math.min(3, Math.max(1, Number(retries) || 3));
+          let note = "";
+          for (let attempt = 1; attempt <= tries; attempt += 1) {
+            try {
+              const lock = lookLockForScene(scene, cursor.characters, cursor.locations || []);
+              const result = await paintPanel({
+                data: {
+                  prompt: [scene.imagePrompt, lock].filter(Boolean).join("\n"),
+                  reference: faceReferenceFor(scene, cursor.characters, cursor.locations || []),
+                  repo: imageRepo.trim(),
+                  imageModel,
+                  imageApiKey: imageApiKey.trim(),
+                  hfToken: hfToken.trim(),
+                  aspect,
+                  ...call,
+                },
+              });
+              if (!result.ok) return { ok: false, scene, error: result.error };
+              if (result.fallback) usedFallback = true;
+              const url = await trimGeneratedImage(result.url, aspect);
+              const check = await checkPanel({ data: { prompt: scene.imagePrompt, imageUrl: url, ...call } });
+              if (check.ok && check.match === "no" && attempt < tries) {
+                note = check.note || "Face or scene did not match.";
+                continue;
+              }
+              const failed = check.ok && check.match === "no";
+              return {
+                ok: true,
+                scene,
+                url,
+                note: failed ? check.note || `Still off after ${tries} tries.` : check.ok ? check.note : "",
+                failed,
+                tries,
+              };
+            } catch (err) {
+              return { ok: false, scene, error: err instanceof Error ? err.message : "Painting stopped." };
+            }
+          }
+          return { ok: false, scene, error: note || "That panel could not be generated." };
         }),
-        scenes: cursor.scenes.map((item) =>
-          item.id === scene.id ? { ...item, imageUrl: accepted, checkNote: note, retries: failed ? tries : item.retries } : item,
-        ),
-      };
+      );
+      let batchError = "";
+      let mismatch = "";
+      for (const outcome of outcomes) {
+        if (!outcome.ok) {
+          batchError ||= `${outcome.scene.id}: ${outcome.error}`;
+          continue;
+        }
+        const scene = outcome.scene;
+        const mentioned = cursor.characters.filter((character) =>
+          [scene.caption, scene.dialogue, scene.speaker, scene.imagePrompt].join("\n").includes(character.name),
+        );
+        const faceOwner = mentioned.length === 1 ? mentioned[0] : undefined;
+        cursor = {
+          ...cursor,
+          characters: cursor.characters.map((character) => {
+            if (character.faceUrl || !faceOwner || character.id !== faceOwner.id) return character;
+            return { ...character, faceUrl: outcome.url };
+          }),
+          scenes: cursor.scenes.map((item) =>
+            item.id === scene.id
+              ? {
+                  ...item,
+                  imageUrl: outcome.url,
+                  checkNote: outcome.failed ? outcome.note : "",
+                  retries: outcome.failed ? outcome.tries : undefined,
+                }
+              : item,
+          ),
+        };
+        if (outcome.failed) mismatch ||= `${scene.id}: ${outcome.note}`;
+      }
       setProject(cursor);
-      if (failed) {
-        setError(`${note} Fix the prompt or retry this panel. The queue is stopped so the next picture does not start on a bad face.`);
+      if (batchError || mismatch) {
+        setError(
+          batchError
+            ? `${batchError} The batch stopped; completed panels were kept.`
+            : `${mismatch}. Fix the prompt or use Auto-Fix Failed Panels; later batches were stopped.`,
+        );
         setBusy(null);
         setTab("strip");
-        return;
+        return false;
       }
     }
     setBusy(null);
-    setNotice(usedFallback ? "Free fallback painter finished one panel at a time. Faces can drift. Your Colab checkpoint is the real one. Connect the worker so the vision check can run." : "Panels painted one at a time. The first accepted face is kept as a reference.");
+    setNotice(
+      usedFallback
+        ? "The selected painter used a fallback. Review face consistency before rendering."
+        : `${targets.length} panel${targets.length === 1 ? "" : "s"} painted with ${IMAGE_MODELS.find((item) => item.id === imageModel)?.label || imageModel}.`,
+    );
     setTab("strip");
+    return true;
+  }
+
+  async function onAutoFixFailedPanels(): Promise<boolean> {
+    const ids = project.scenes
+      .filter((scene) => !scene.locked && (!scene.imageUrl || scene.checkNote?.startsWith("Still off") || Boolean(scene.retries)))
+      .map((scene) => scene.id);
+    if (!ids.length) {
+      setNotice("No failed or unpainted panels need a retry.");
+      return true;
+    }
+    return onPaint(ids, 5);
   }
 
   useEffect(() => {
@@ -1107,7 +1307,7 @@ export function StudioApp() {
     );
   }
 
-  async function onSendJob(pass: "assemble" | "revoice" = "assemble", source?: Project) {
+  async function onSendJob(pass: "assemble" | "revoice" = "assemble", source?: Project): Promise<boolean> {
     jobPass.current = pass;
     const active = source?.language === "hi" || source?.language === "en" ? source.language : language;
     jobLanguage.current = active;
@@ -1118,27 +1318,24 @@ export function StudioApp() {
       const result = await submitJob({ data: { url: workerUrl, token: workerToken, packet: packetNow(pass, source) } });
       if (!result.ok) {
         setError(pass === "revoice" ? `${result.error} Pictures were not touched.` : result.error);
-        return;
+        return false;
       }
-      if (result.jobId) {
-        setJob({
-          id: result.jobId,
-          status: "queued",
-          progress: 0,
-          label: pass === "revoice" ? "Re-voicing" : "Accepted",
-          error: "",
-          mp4Url: null,
-          timing: {},
-          voices: {},
-        });
-        setNotice(pass === "revoice" ? "Worker is re-voicing the same pictures. Audio and captions only." : `Worker accepted the film. Watching job ${result.jobId}.`);
-        setTab("bay");
-      } else {
-        setJob(null);
-        setNotice("Worker accepted the packet, but the reply had no job id.");
-      }
+      setJob({
+        id: result.jobId,
+        status: "queued",
+        progress: 0,
+        label: pass === "revoice" ? "Re-voicing" : "Accepted",
+        error: "",
+        mp4Url: null,
+        timing: {},
+        voices: {},
+      });
+      setNotice(pass === "revoice" ? "Worker is re-voicing the same pictures. Audio and captions only." : `Worker accepted the film. Watching job ${result.jobId}.`);
+      setTab("bay");
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "The worker did not take the job.");
+      return false;
     } finally {
       setBusy(null);
     }
@@ -1228,7 +1425,7 @@ export function StudioApp() {
       if (!google) throw new Error("Google sign-in did not load.");
       const client = google.accounts.oauth2.initTokenClient({
         client_id: clientId,
-        scope: "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly openid email",
+        scope: "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.force-ssl https://www.googleapis.com/auth/youtube.readonly openid email",
         callback: (resp) => {
           if (!resp.access_token) {
             setError(resp.error || "Google did not return a token.");
@@ -1301,7 +1498,7 @@ export function StudioApp() {
       setError(language === "hi" ? "Connect the Hindi YouTube channel first." : "Connect the English YouTube channel first.");
       return;
     }
-    setBusy("Uploading from the worker");
+    setBusy("Uploading from the Colab worker");
     setError(null);
     const tags = parseTags(tagDraft);
     try {
@@ -1318,12 +1515,55 @@ export function StudioApp() {
           language,
         },
       });
-      if (!result.ok) {
-        setError(result.error);
+      if (result.ok) {
+        setWatchUrl(result.watchUrl);
+        setNotice("Uploaded directly from the worker. The watch link is below.");
         return;
       }
-      setWatchUrl(result.watchUrl);
-      setNotice("Uploaded. The watch link is below.");
+      setBusy("Worker upload failed. Preparing the browser upload fallback.");
+      let blob: Blob | null = null;
+      let sourceError = "";
+      if (filmSrc) {
+        try {
+          const response = await fetch(filmSrc);
+          if (!response.ok) sourceError = `Worker master returned ${response.status}.`;
+          else blob = await response.blob();
+        } catch (err) {
+          sourceError = err instanceof Error ? err.message : "The worker master could not be loaded.";
+        }
+      }
+      if (!blob) {
+        const response = await fetch("/api/studio/mp4", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: "full", url: workerUrl, token: workerToken, jobId: job.id }),
+        });
+        if (!response.ok) {
+          const details = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(
+            `Worker upload failed (${result.error}); browser fallback could not fetch the master${sourceError ? ` (${sourceError})` : ""}${details?.error ? `: ${details.error}` : "."}`,
+          );
+        }
+        blob = await response.blob();
+      }
+      if (blob.size < 64 || !blob.type.includes("video")) throw new Error("The browser fallback did not receive an MP4 master.");
+      setBusy("Uploading the master from this browser");
+      const uploaded = await uploadYoutubeBlob({
+        blob,
+        token: slotToken,
+        title: project.seo.title,
+        description: [project.seo.description, project.seo.hashtags].filter(Boolean).join("\n\n"),
+        tags,
+        privacy: youtubePrivacy(project.seo.privacy),
+        language,
+        captions: srtFor(project, language),
+      });
+      setWatchUrl(uploaded.watchUrl);
+      setNotice(
+        uploaded.captionsUploaded
+          ? `Worker upload failed (${result.error}). Browser upload succeeded with captions.`
+          : `Video uploaded from this browser, but YouTube rejected the caption file. Add ${language}.srt in YouTube Studio.`,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "The upload did not finish.");
     } finally {
@@ -1339,23 +1579,72 @@ export function StudioApp() {
     setBusy("Asking the studio AI");
     setError(null);
     try {
-      const beats = project.scenes
-        .slice(0, 40)
-        .map((scene) => `${scene.id}: ${voiceLine(scene, language).slice(0, 90)}`)
-        .join("\n");
-      const names = project.characters.map((character) => character.name).filter(Boolean).join(", ");
-      const context = `${project.title}. Language ${language}. ${project.scenes.length} panels. Pictures stay on a language switch. Cast: ${names || "none"}.\nBeats:\n${beats}\n${project.bible ? `Look lock: ${project.bible.slice(0, 500)}` : ""}`;
+      const context = JSON.stringify({
+        chapterScript: draft,
+        project: {
+          title: project.title,
+          logline: project.logline,
+          narration: project.narration,
+          language,
+          scenes: project.scenes.map((scene) => ({
+            id: scene.id,
+            caption: scene.caption,
+            dialogue: scene.dialogue,
+            speaker: scene.speaker,
+            prompt: scene.imagePrompt,
+            state: scene.state,
+            imageReady: Boolean(scene.imageUrl),
+            checkNote: scene.checkNote || "",
+            captionEn: scene.captionEn || "",
+            dialogueEn: scene.dialogueEn || "",
+            captionHi: scene.captionHi || "",
+            dialogueHi: scene.dialogueHi || "",
+          })),
+          characters: project.characters.map((character) => ({
+            name: character.name,
+            look: character.look,
+            soul: character.soul,
+            vessel: character.vessel,
+            starLocked: Boolean(character.starLocked),
+            referenceReady: Boolean(character.faceUrl),
+          })),
+          locations: (project.locations || []).map((location) => ({
+            name: location.name,
+            description: location.description,
+            starLocked: location.starLocked,
+            referenceReady: Boolean(location.imageUrl),
+          })),
+          characterBible: project.bible || bible,
+        },
+        settings: {
+          language,
+          imageModel,
+          provider,
+          textModel: customModel.trim() || modelId,
+          localModel,
+          duty,
+          aspect,
+          imageRepo,
+        },
+        worker: {
+          connected: Boolean(workerUrl.trim()),
+          health: workerBadge || "not checked",
+          job: job ? { id: job.id, status: job.status, progress: job.progress, label: job.label, error: job.error } : null,
+        },
+      });
       const result = await chatTurn({ data: { message, context, ...session() } });
       if (!result.ok) {
         setChatLog((current) => [...current, { role: "studio", text: result.error }]);
         return;
       }
       setChatLog((current) => [...current, { role: "studio", text: result.reply }]);
-      if (result.action?.type === "line") {
-        const action = result.action;
+      const action = result.action;
+      if (!action) return;
+      let confirmation = "";
+      if (action.type === "line") {
         const exists = project.scenes.some((scene) => scene.id === action.id);
         if (!exists) {
-          setNotice(`No beat ${action.id}. The line was not changed.`);
+          confirmation = `No beat ${action.id} exists, so nothing changed.`;
         } else {
           setProject((current) => ({
             ...current,
@@ -1366,14 +1655,12 @@ export function StudioApp() {
               return { ...next, captionEn: action.text, dialogueEn: "", lineEn: action.text };
             }),
           }));
-          setNotice(`Beat ${action.id} updated. Pictures were not redrawn.`);
+          confirmation = `Beat ${action.id} updated. Its existing picture was kept.`;
         }
-      }
-      if (result.action?.type === "look") {
-        const action = result.action;
+      } else if (action.type === "look") {
         const known = project.characters.some((character) => character.name.toLowerCase() === action.name.toLowerCase());
         if (!known) {
-          setNotice(`No character named ${action.name}. The look was not changed.`);
+          confirmation = `No character named ${action.name} exists, so the look was not changed.`;
         } else {
           setProject((current) => {
             const characters = current.characters.map((character) =>
@@ -1381,8 +1668,84 @@ export function StudioApp() {
             );
             return { ...current, characters, bible: bibleDocument(characters) };
           });
-          setNotice(`${action.name} look updated. Pictures were not redrawn.`);
+          confirmation = `${action.name}'s look was updated. Existing pictures were kept.`;
         }
+      } else if (action.type === "update_scene") {
+        if (!project.scenes.some((scene) => scene.id === action.sceneId)) {
+          confirmation = `No scene ${action.sceneId} exists, so nothing changed.`;
+        } else {
+          setProject((current) => ({
+            ...current,
+            scenes: current.scenes.map((scene) => {
+              if (scene.id !== action.sceneId) return scene;
+              const caption = action.caption ?? scene.caption;
+              const dialogue = action.dialogue ?? scene.dialogue;
+              const next: Scene = {
+                ...scene,
+                caption,
+                dialogue,
+                ...(action.prompt !== undefined ? { imagePrompt: action.prompt, promptLocked: Boolean(action.prompt.trim()) } : {}),
+              };
+              const line = [caption, dialogue].filter(Boolean).join(" ").trim();
+              if (language === "hi") {
+                return {
+                  ...next,
+                  ...(action.caption !== undefined ? { captionHi: caption } : {}),
+                  ...(action.dialogue !== undefined ? { dialogueHi: dialogue } : {}),
+                  ...(action.caption !== undefined || action.dialogue !== undefined ? { lineHi: line } : {}),
+                };
+              }
+              return {
+                ...next,
+                ...(action.caption !== undefined ? { captionEn: caption } : {}),
+                ...(action.dialogue !== undefined ? { dialogueEn: dialogue } : {}),
+                ...(action.caption !== undefined || action.dialogue !== undefined ? { lineEn: line } : {}),
+              };
+            }),
+          }));
+          confirmation = `Scene ${action.sceneId} was updated in the studio. Its current picture was kept; use Retry this panel to redraw from the new prompt.`;
+        }
+      } else if (action.type === "add_or_update_character") {
+        const exists = project.characters.some((character) => character.name.toLowerCase() === action.name.toLowerCase());
+        setProject((current) => {
+          const characters = [...current.characters];
+          const index = characters.findIndex((character) => character.name.toLowerCase() === action.name.toLowerCase());
+          if (index >= 0) {
+            const previous = characters[index]!;
+            characters[index] = {
+              ...previous,
+              ...(action.look ? { look: action.look, vessel: action.look } : {}),
+              ...(action.starLocked !== undefined ? { starLocked: action.starLocked } : {}),
+            };
+          } else {
+            characters.push({
+              id: action.name.toLowerCase().replace(/[^a-z0-9]+/g, "-") || `character-${characters.length + 1}`,
+              name: action.name,
+              soul: "Added by the Universal Studio Agent.",
+              vessel: action.look || "Visual description not added yet.",
+              look: action.look || "Visual description not added yet.",
+              starLocked: action.starLocked ?? false,
+            });
+          }
+          return { ...current, characters, bible: bibleDocument(characters) };
+        });
+        confirmation = `Character ${action.name} ${exists ? "updated" : "added"}${action.starLocked ? " and reference-locked" : ""}.`;
+      } else if (action.type === "split_script_into_scenes") {
+        const ok = await directText(sanitizeNovelText(draft));
+        confirmation = ok ? "The chapter plan was split into scenes and opened in Cast." : "The chapter plan could not be completed; the current scenes were kept.";
+      } else if (action.type === "switch_language") {
+        if (action.language !== language) await onPickLanguage(action.language, true);
+        confirmation = `Studio language set to ${action.language === "hi" ? "Hindi" : "English"}. Existing pictures were kept.`;
+      } else if (action.type === "trigger_batch_paint") {
+        const ok = await onPaint(undefined, 5);
+        confirmation = ok ? "The 5-panel parallel paint batch finished." : "The paint batch stopped on a failed panel; accepted panels were kept.";
+      } else if (action.type === "start_worker_render") {
+        const ok = await onSendJob();
+        confirmation = ok ? "The worker accepted the render and its job is now tracked in Video." : "The worker render could not start; see the error above.";
+      }
+      if (confirmation) {
+        setChatLog((current) => [...current, { role: "studio", text: confirmation }]);
+        setNotice(confirmation);
       }
     } catch (err) {
       setChatLog((current) => [
@@ -1516,6 +1879,27 @@ export function StudioApp() {
                 Keys, tokens, notebook links, and the YouTube token live in this tab’s memory only. Refresh clears them. Nothing is written to storage.
               </p>
             </div>
+            <label className="block" htmlFor="active-image-model">
+              <span className="text-sm font-medium text-paper">Active Image Model</span>
+              <select id="active-image-model" value={imageModel} onChange={(event) => setImageModel(event.target.value as ImageModel)} className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base">
+                {IMAGE_MODELS.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+              </select>
+              <span className="mt-1 block text-xs text-muted">{IMAGE_MODELS.find((model) => model.id === imageModel)?.detail}</span>
+            </label>
+            {imageModel === "nano-banana" || imageModel === "nano-banana-pro" ? (
+              <label className="block" htmlFor="image-api-key">
+                <span className="text-sm font-medium text-paper">Gemini image API key</span>
+                <input id="image-api-key" type="password" value={imageApiKey} onChange={(event) => setImageApiKey(event.target.value)} autoComplete="off" className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none" placeholder="Uses the AI key above when Gemini is selected" />
+                <span className="mt-1 block text-xs text-muted">Only sent to the server for this image request; not stored with the project.</span>
+              </label>
+            ) : null}
+            {imageModel === "hf-flux-schnell" ? (
+              <label className="block" htmlFor="hf-token">
+                <span className="text-sm font-medium text-paper">Hugging Face token (optional)</span>
+                <input id="hf-token" type="password" value={hfToken} onChange={(event) => setHfToken(event.target.value)} autoComplete="off" className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none" placeholder="Free-tier inference may require a token" />
+                <span className="mt-1 block text-xs text-muted">Token stays in this tab only. Hugging Face may enforce model access and rate limits.</span>
+              </label>
+            ) : null}
             <label className="block" htmlFor="ai-provider">
               <span className="text-sm font-medium text-paper">AI provider</span>
               <select id="ai-provider" value={provider} onChange={(event) => chooseProvider(event.target.value as CloudProvider)} className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base">
@@ -1640,7 +2024,7 @@ export function StudioApp() {
             <label className="block" htmlFor="image-repo">
               <span className="text-sm font-medium text-paper">Image checkpoint</span>
               <input id="image-repo" value={imageRepo} onChange={(event) => setImageRepo(event.target.value)} placeholder="cagliostrolab/animagine-xl-3.1 or a Flux repo" autoComplete="off" spellCheck={false} className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base outline-none placeholder:text-muted" />
-              <span className="mt-1 block text-xs text-muted">Empty keeps the worker default. A repo name with “flux” loads Flux and can use the saved face. If that model cannot load, Pollinations runs, then a simple ink drawing. Faces can drift on the fallback.</span>
+              <span className="mt-1 block text-xs text-muted">Used by Colab GPU Painter only. Empty keeps Animagine-XL-3.1; a Flux repo selects Flux. Model failures are shown explicitly instead of switching to an unrelated image service.</span>
             </label>
             <label className="block" htmlFor="worker-url">
               <span className="text-sm font-medium text-paper">Live worker URL</span>
@@ -1770,11 +2154,29 @@ export function StudioApp() {
               <h2 className="text-3xl text-paper">Soul and vessel</h2>
               <p className="mt-2 text-sm text-muted">{project.hook || project.logline}</p>
             </div>
+            <label className="block" htmlFor="cast-image-model">
+              <span className="text-sm font-medium text-paper">Active Image Model</span>
+              <select id="cast-image-model" value={imageModel} onChange={(event) => setImageModel(event.target.value as ImageModel)} className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base">
+                {IMAGE_MODELS.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+              </select>
+            </label>
             <ul className="space-y-3">
               {project.characters.length === 0 ? <li className="text-sm text-muted">No named cast in this cut.</li> : null}
               {project.characters.map((character) => (
                 <li key={character.id} className="rounded-2xl bg-ink-2 p-4">
-                  <p className="font-display text-2xl text-paper">{character.name}</p>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-display text-2xl text-paper">{character.name}</p>
+                    <button
+                      type="button"
+                      aria-pressed={Boolean(character.starLocked)}
+                      aria-label={`${character.starLocked ? "Unlock" : "Lock"} ${character.name} reference`}
+                      onClick={() => patchCast(character.id, { starLocked: !character.starLocked }, false)}
+                      className={`flex min-h-11 items-center gap-2 rounded-xl px-3 text-xs font-semibold ${character.starLocked ? "bg-seal text-paper" : "bg-panel text-muted"}`}
+                    >
+                      <Star className={`size-4 ${character.starLocked ? "fill-current" : ""}`} aria-hidden />
+                      {character.starLocked ? "Reference locked" : "Lock reference"}
+                    </button>
+                  </div>
                   <label className="mt-3 block text-xs font-semibold tracking-widest text-cinnabar uppercase" htmlFor={`soul-${character.id}`}>
                     Soul
                     <textarea id={`soul-${character.id}`} value={character.soul} onChange={(event) => setProject((current) => ({ ...current, characters: current.characters.map((item) => item.id === character.id ? { ...item, soul: event.target.value } : item) }))} className="field mt-2 min-h-20 w-full rounded-xl px-3 py-2 text-sm font-medium normal-case outline-none" />
@@ -1820,6 +2222,57 @@ export function StudioApp() {
                 </li>
               ))}
             </ul>
+            <section className="space-y-3 rounded-2xl bg-ink-2 p-4" aria-labelledby="location-lock-heading">
+              <div>
+                <h3 id="location-lock-heading" className="text-lg text-paper">Location references</h3>
+                <p className="mt-1 text-xs text-muted">Star a location to keep its visual description in matching panel prompts. An optional image reference is used by supported painters.</p>
+              </div>
+              {(project.locations || []).map((location) => (
+                <div key={location.id} className="space-y-2 rounded-xl bg-panel p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-semibold text-paper">{location.name}</p>
+                    <button
+                      type="button"
+                      aria-pressed={location.starLocked}
+                      aria-label={`${location.starLocked ? "Unlock" : "Lock"} ${location.name} location reference`}
+                      onClick={() => setProject((current) => ({
+                        ...current,
+                        locations: (current.locations || []).map((item) => item.id === location.id ? { ...item, starLocked: !item.starLocked } : item),
+                      }))}
+                      className={`flex min-h-11 items-center gap-2 rounded-xl px-3 text-xs font-semibold ${location.starLocked ? "bg-seal text-paper" : "bg-ink-2 text-muted"}`}
+                    >
+                      <Star className={`size-4 ${location.starLocked ? "fill-current" : ""}`} aria-hidden />
+                      {location.starLocked ? "Locked" : "Lock"}
+                    </button>
+                  </div>
+                  <textarea
+                    aria-label={`${location.name} visual description`}
+                    value={location.description}
+                    onChange={(event) => setProject((current) => ({
+                      ...current,
+                      locations: (current.locations || []).map((item) => item.id === location.id ? { ...item, description: event.target.value } : item),
+                    }))}
+                    className="field min-h-16 w-full rounded-xl px-3 py-2 text-sm outline-none"
+                  />
+                  <input
+                    aria-label={`${location.name} reference image URL`}
+                    value={location.imageUrl || ""}
+                    onChange={(event) => setProject((current) => ({
+                      ...current,
+                      locations: (current.locations || []).map((item) => item.id === location.id ? { ...item, imageUrl: event.target.value } : item),
+                    }))}
+                    placeholder="Optional HTTPS reference image URL"
+                    inputMode="url"
+                    className="field min-h-11 w-full rounded-xl px-3 text-sm outline-none"
+                  />
+                </div>
+              ))}
+              <label className="block text-sm text-paper" htmlFor="location-name">Add a location lock
+                <input id="location-name" value={locationNameDraft} onChange={(event) => setLocationNameDraft(event.target.value)} className="field mt-2 min-h-11 w-full rounded-xl px-3 text-base outline-none" placeholder="Palace gate" />
+              </label>
+              <textarea value={locationDescriptionDraft} onChange={(event) => setLocationDescriptionDraft(event.target.value)} className="field min-h-16 w-full rounded-xl px-3 py-2 text-sm outline-none" placeholder="Describe the colors, architecture, light, and atmosphere to keep consistent." />
+              <button type="button" onClick={addLocationReference} disabled={!!busy} className="min-h-11 w-full rounded-xl bg-panel text-sm font-semibold text-paper disabled:opacity-50">Save location reference</button>
+            </section>
             <label className="block text-sm text-paper" htmlFor="bible-lock">
               Character bible
               <textarea id="bible-lock" value={project.bible || bible} onChange={(event) => { setBible(event.target.value); setProject((current) => ({ ...current, bible: event.target.value })); }} className="field mt-2 min-h-28 w-full rounded-xl px-3 py-3 text-sm outline-none" placeholder="Face, hair, scars, outfit, and the chapter an outfit changes. Written once. A language switch does not rebuild it." />
@@ -1830,7 +2283,13 @@ export function StudioApp() {
             <button type="button" onClick={() => void onPaint()} disabled={!!busy} className="min-h-12 w-full rounded-2xl bg-seal text-sm font-semibold text-paper disabled:opacity-50">
               Paint unpainted panels
             </button>
-            <p className="text-xs text-muted">One English prompt per beat, then one picture. The worker checkpoint draws it. If that model cannot load, the free fallback is used and faces can drift. A language switch does not come back here.</p>
+            <button type="button" onClick={() => void onPaint(undefined, 5)} disabled={!!busy} className="min-h-12 w-full rounded-2xl bg-panel text-sm font-semibold text-paper disabled:opacity-50">
+              Generate 5x Batch
+            </button>
+            <button type="button" onClick={() => void onAutoFixFailedPanels()} disabled={!!busy} className="min-h-12 w-full rounded-2xl bg-cinnabar text-sm font-semibold text-paper disabled:opacity-50">
+              Auto-Fix Failed Panels
+            </button>
+            <p className="text-xs text-muted">The selected model paints each beat. Gemini and the GPU painter can use starred face references; location locks keep selected environments consistent. Failed panels stop the next batch so you can review them.</p>
           </section>
         ) : null}
 
@@ -1839,6 +2298,12 @@ export function StudioApp() {
             <div className="flex items-end justify-between gap-3">
               <h2 className="text-3xl text-paper">Explanation film</h2>
             </div>
+            <label className="block" htmlFor="beats-image-model">
+              <span className="text-sm font-medium text-paper">Active Image Model</span>
+              <select id="beats-image-model" value={imageModel} onChange={(event) => setImageModel(event.target.value as ImageModel)} className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base">
+                {IMAGE_MODELS.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+              </select>
+            </label>
             <div className="grid grid-cols-2 gap-2" role="group" aria-label="Aspect ratio">
               {(["16:9", "9:16"] as const).map((option) => (
                 <button key={option} type="button" aria-pressed={aspect === option} onClick={() => setAspect(option)} className={`min-h-12 rounded-xl text-sm font-semibold ${aspect === option ? "bg-seal text-paper" : "bg-panel text-paper"}`}>
@@ -1877,6 +2342,14 @@ export function StudioApp() {
             <button type="button" onClick={() => void onPlayPanels()} disabled={!!busy || project.scenes.length === 0} className="min-h-12 w-full rounded-2xl bg-seal text-sm font-semibold text-paper disabled:opacity-50">
               Play from this panel
             </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button type="button" onClick={() => void onPaint(undefined, 5)} disabled={!!busy} className="min-h-12 rounded-xl bg-panel px-2 text-sm font-semibold text-paper disabled:opacity-50">
+                Generate 5x Batch
+              </button>
+              <button type="button" onClick={() => void onAutoFixFailedPanels()} disabled={!!busy} className="min-h-12 rounded-xl bg-cinnabar px-2 text-sm font-semibold text-paper disabled:opacity-50">
+                Auto-Fix Failed Panels
+              </button>
+            </div>
             {project.bible ? <p className="text-xs text-muted">Look lock: {project.bible.slice(0, 220)}</p> : null}
             <div className="space-y-4">
               {project.scenes.map((scene, index) => {
@@ -1906,7 +2379,7 @@ export function StudioApp() {
                       </label>
                     )}
                     {scene.locked ? null : (
-                      <button type="button" onClick={() => void onPaint(scene.id)} disabled={!!busy} className="min-h-11 rounded-xl bg-panel px-4 text-sm font-semibold text-paper disabled:opacity-50">
+                      <button type="button" onClick={() => void onPaint([scene.id])} disabled={!!busy} className="min-h-11 rounded-xl bg-panel px-4 text-sm font-semibold text-paper disabled:opacity-50">
                         Retry this panel
                       </button>
                     )}
@@ -2070,7 +2543,7 @@ export function StudioApp() {
               <h2 id="youtube-heading" className="text-3xl text-paper">
                 YouTube
               </h2>
-              <p className="mt-2 text-sm text-muted">Preview first. Upload uses the {language === "hi" ? "Hindi" : "English"} channel and that language’s master. The phone does not hold the full file. Nothing uploads until you press Upload.</p>
+              <p className="mt-2 text-sm text-muted">Preview first. Upload uses the {language === "hi" ? "Hindi" : "English"} channel and that language’s master. The worker uploads directly; if that endpoint fails, the browser uses the MP4 blob as a fallback.</p>
             </div>
             <div className="overflow-hidden rounded-2xl bg-ink">
               {filmSrc ? (

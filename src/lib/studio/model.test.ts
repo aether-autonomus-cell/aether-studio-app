@@ -75,3 +75,12 @@ test("panel paths become absolute before the worker renders them", () => {
   const kept = projectWithAbsoluteArt(next, "https://other.example");
   assert.equal(kept.scenes[0].imageUrl, "https://studio.example/panels/01-bridge.jpg");
 });
+
+test("starred location locks reach the Colab job packet", () => {
+  const project = cutChapter("Bridge Night\n\nRain argued with the lanterns while Ren watched the water.");
+  project.locations = [{ id: "bridge", name: "Old Bridge", description: "Warm lanterns over dark water.", starLocked: true }];
+  project.scenes[0]!.caption = "Rain falls on Old Bridge.";
+  project.scenes[0]!.imagePrompt = "Rain on the bridge.";
+  const packet = jobPacketV2Schema.parse(jobPacket(project));
+  assert.match(packet.chapters[0]!.scenes[0]!.tiles[0]!.prompt, /Locked location Old Bridge/);
+});

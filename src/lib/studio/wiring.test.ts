@@ -6,6 +6,7 @@ import { chooseVoice } from "./export.ts";
 
 const app = readFileSync(new URL("../../components/studio/app.tsx", import.meta.url), "utf8");
 const api = readFileSync(new URL("./api.ts", import.meta.url), "utf8");
+const worker = readFileSync(new URL("../../../colab_worker.py", import.meta.url), "utf8");
 
 test("secrets are never written to storage", () => {
   const sources = [app, api, readFileSync(new URL("./export.ts", import.meta.url), "utf8")];
@@ -59,6 +60,22 @@ test("factory cell exposes the gpu worker the app calls", () => {
   }
   assert.equal(FACTORY_CELL.includes("tensor_split=None"), false);
   assert.equal(FACTORY_CELL.includes("Generating images"), false);
+  assert.doesNotMatch(FACTORY_CELL, /pollinations/i);
+  assert.match(FACTORY_CELL, /GPU painter unavailable/);
+  for (const path of ["/api/v1/health", "/api/v1/llm", "/api/v1/paint", "/api/v1/speak", "/api/v1/jobs", "/api/v1/fetch", "/api/v1/youtube-upload"]) {
+    assert.equal(worker.includes(path), true, path);
+  }
+});
+
+test("image generation has selectable providers and no Pollinations URL fallback", () => {
+  assert.match(app, /Generate 5x Batch/);
+  assert.match(app, /Auto-Fix Failed Panels/);
+  assert.match(app, /uploadYoutubeBlob/);
+  assert.match(api, /gemini-2\.0-flash-exp-image-generation/);
+  assert.match(api, /imagen-3\.0-generate-002/);
+  assert.match(api, /FLUX\.1-schnell/);
+  assert.match(api, /\/api\/v1\/paint/);
+  assert.doesNotMatch(api, /image\.pollinations\.ai/);
 });
 
 test("response handling never injects redaction placeholders", () => {

@@ -23,6 +23,7 @@ for _folder in (PANEL_DIR, VOICE_DIR, CLIP_DIR):
     _folder.mkdir(exist_ok=True)
 TIMING_PATH = OUT / "timing.json"
 PAINTER = {"pipe": None, "img2img": None, "kind": "", "name": ""}
+PAINT_LOCK = threading.Lock()
 VISION = {"model": None}
 OCR = {"reader": None}
 FETCH_JOBS = {}
@@ -42,7 +43,7 @@ except Exception:
     GPU_NAMES = []
 print("GPUs", GPU_COUNT, GPU_NAMES, flush=True)
 print("Image checkpoint", os.environ.get("AETHER_IMAGE_REPO", "cagliostrolab/animagine-xl-3.1"), flush=True)
-print("Set AETHER_IMAGE_REPO to a Flux repo or a manhwa checkpoint before this cell if you do not want Animagine XL. Pollinations is only the fallback when that model cannot load.", flush=True)
+print("Set AETHER_IMAGE_REPO to a Flux repo or a manhwa checkpoint before this cell if you do not want Animagine XL. GPU painter errors are returned explicitly; no remote image fallback is used.", flush=True)
 print("Full GLM-5.2 4-bit GGUF is about 466GB and will not fit Colab T4 or Kaggle T4x2. gguf mode loads a 4-bit distill (default GLM-4-9B Q4) unless AETHER_GGUF_REPO is set. Flagship GLM-5.2 stays on the cloud key (Z.ai / OpenRouter / GitHub Models).", flush=True)
 if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
     subprocess.call(["apt-get", "update", "-qq"])
@@ -120,33 +121,6 @@ def complete(mode, system, prompt):
     gen = model.generate(**batch, max_new_tokens=1200, do_sample=False)
     return tok.decode(gen[0][batch["input_ids"].shape[1]:], skip_special_tokens=True)
 
-def ink_panel(prompt, dest, size):
-    from PIL import Image, ImageDraw
-    seed = abs(hash(prompt or "panel")) % 9973
-    w, h = size
-    im = Image.new("RGB", (w, h), (16, 12, 14))
-    draw = ImageDraw.Draw(im, "RGBA")
-    for band in range(16):
-        y0 = int(h * band / 16)
-        y1 = int(h * (band + 1) / 16) + 1
-        shade = 20 + band * 6 + (seed % 18)
-        draw.rectangle([0, y0, w, y1], fill=(shade, 16 + band * 2, 22 + (seed % 10), 255))
-    moon = 64 + (seed % 48)
-    mx = int(w * (0.58 + (seed % 17) / 100))
-    my = int(h * 0.08)
-    draw.ellipse([mx, my, mx + moon * 2, my + moon * 2], fill=(236, 220, 186, 235))
-    ridge = int(h * (0.58 + (seed % 8) / 100))
-    draw.polygon([(0, ridge + 80), (int(w * 0.35), ridge), (int(w * 0.62), ridge + 46), (w, ridge - 10), (w, h), (0, h)], fill=(12, 10, 14, 255))
-    cx = int(w * (0.28 + (seed % 40) / 100))
-    cy = int(h * 0.62)
-    robe = (120 + (seed % 90), 36, 28, 255)
-    draw.polygon([(cx - 46, cy + 220), (cx, cy + 36), (cx + 46, cy + 220)], fill=robe)
-    draw.ellipse([cx - 22, cy - 10, cx + 22, cy + 36], fill=(232, 214, 190, 255))
-    if seed % 2 == 0:
-        draw.line([(cx + 30, cy + 20), (cx + 150, cy - 80)], fill=(210, 210, 220, 255), width=6)
-    im.convert("RGB").save(dest)
-    return dest
-
 def fetch_image(raw, dest):
     if isinstance(raw, str) and raw.startswith("data:"):
         b64 = raw.split(",", 1)[-1]
@@ -212,8 +186,8 @@ def load_painter():
 def paint_local(prompt, dest, size, reference):
     from PIL import Image
     bundle = load_painter()
-    w = max(512, (min(size[0], 832) // 64) * 64)
-    h = max(768, (min(size[1], 1216) // 64) * 64)
+    w = max(512, (min(size[0], 1216) // 64) * 64)
+    h = max(512, (min(size[1], 1216) // 64) * 64)
     if bundle["kind"] == "flux":
         if reference and bundle.get("img2img") is not None:
             ref = Image.open(reference).convert("RGB").resize((w, h))
@@ -229,29 +203,13 @@ def paint_local(prompt, dest, size, reference):
     return bundle["kind"] + ("+ref" if reference else "")
 
 def paint_prompt(prompt, dest, size, reference=None):
-    import requests, urllib.parse
-    locked = "Vertical colored manhwa, clean ink, dramatic lighting, consistent character, no text, no letters, no watermark, no speech bubbles. " + (prompt or "panel")
-    try:
-        kind = paint_local(locked, dest, size, reference)
-        print("checkpoint panel", kind, flush=True)
-        return kind
-    except Exception as exc:
-        print("checkpoint skipped", exc, flush=True)
-    try:
-        url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(locked[:480]) + "?width=%d&height=%d&nologo=true&model=flux" % (min(size[0], 768), min(size[1], 1152))
-        res = requests.get(url, timeout=90)
-        kind = res.headers.get("content-type", "")
-        if res.ok and kind.startswith("image") and len(res.content) > 1000:
-            dest.write_bytes(res.content)
-            print("pollinations panel — faces can drift", flush=True)
-            return "pollinations"
-    except Exception as exc:
-        print("pollinations skipped", exc, flush=True)
-    ink_panel(prompt, dest, size)
-    return "ink"
+    locked = "Colored manhwa, clean ink, dramatic lighting, consistent character, no text, no letters, no watermark, no speech bubbles. " + (prompt or "panel")
+    kind = paint_local(locked, dest, size, reference)
+    print("checkpoint panel", kind, flush=True)
+    return kind
 
 def materialize_reference(payload):
-    dest = OUT / "ref-face.png"
+    dest = OUT / ("ref-face-" + uuid.uuid4().hex + ".png")
     raw_b64 = payload.get("referenceBase64") or ""
     raw = payload.get("reference") or ""
     try:
@@ -290,7 +248,11 @@ def ensure_panel(scene, dest, size, revoice):
     tiles = scene.get("tiles") or [{}]
     prompt = tiles[0].get("prompt") if tiles and isinstance(tiles[0], dict) else ""
     reference = materialize_reference({"reference": scene.get("reference") or ""})
-    paint_prompt(raw if isinstance(raw, str) else "" or prompt or "", stable, size, reference)
+    try:
+        paint_prompt(raw if isinstance(raw, str) else "" or prompt or "", stable, size, reference)
+    finally:
+        if reference and reference.exists():
+            reference.unlink()
     shutil.copy(stable, dest)
     PANEL_CACHE[sid] = str(stable)
     return "painted"
@@ -779,16 +741,29 @@ async def paint(request: Request):
     if not allowed(request.headers):
         raise HTTPException(401, "token")
     payload = await request.json()
-    repo = (payload.get("repo") or "").strip()
-    if repo:
-        wanted = repo[:200]
-        if PAINTER.get("name") != wanted:
-            PAINTER.update(pipe=None, img2img=None, kind="", name="")
-        os.environ["AETHER_IMAGE_REPO"] = wanted
-    dest = OUT / "paint-once.png"
+    dest = OUT / ("paint-" + uuid.uuid4().hex + ".png")
     reference = materialize_reference(payload)
-    mode = paint_prompt(payload.get("prompt") or "panel", dest, (832, 1216), reference)
-    return {"imageBase64": base64.b64encode(dest.read_bytes()).decode(), "mimeType": "image/png", "fallback": mode == "pollinations", "engine": mode, "referenceUsed": bool(reference)}
+    aspect = payload.get("aspect")
+    size = (1280, 720) if aspect == "16:9" else (832, 1216)
+    try:
+        with PAINT_LOCK:
+            repo = (payload.get("repo") or "").strip()
+            if repo:
+                wanted = repo[:200]
+                if PAINTER.get("name") != wanted:
+                    PAINTER.update(pipe=None, img2img=None, kind="", name="")
+                os.environ["AETHER_IMAGE_REPO"] = wanted
+            mode = paint_prompt(payload.get("prompt") or "panel", dest, size, reference)
+            image = base64.b64encode(dest.read_bytes()).decode()
+    except Exception as exc:
+        print("GPU painter failed", type(exc).__name__, str(exc)[:180], flush=True)
+        raise HTTPException(503, f"GPU painter unavailable ({type(exc).__name__}). Check the model and GPU, then retry.")
+    finally:
+        if dest.exists():
+            dest.unlink()
+        if reference and reference.exists():
+            reference.unlink()
+    return {"imageBase64": image, "mimeType": "image/png", "fallback": False, "engine": mode, "referenceUsed": bool(reference)}
 
 @app.post("/tts")
 @app.post("/api/v1/speak")

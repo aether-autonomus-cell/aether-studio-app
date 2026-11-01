@@ -32,6 +32,8 @@ test("status json reports real progress, failure, and the mp4", () => {
 
 test("job ids are read from the accept body and cannot escape the path", () => {
   assert.equal(readJobId(JSON.stringify({ jobId: "abc-1" })), "abc-1");
+  assert.equal(readJobId(JSON.stringify({ job: { task_id: "task-42" } })), "task-42");
+  assert.equal(readJobId(JSON.stringify({ taskId: "task-43" })), "task-43");
   assert.equal(jobResourcePath("abc-1", "mp4"), "/api/v1/jobs/abc-1/mp4");
   assert.throws(() => assertJobId("../etc"), /not valid/);
 });

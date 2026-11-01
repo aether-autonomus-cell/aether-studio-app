@@ -3,7 +3,6 @@ import { studioConfig } from "@/lib/studio/config";
 import {
   cloudRequest,
   directorSystem,
-  imageVia,
   readSession,
   shouldFailover,
   textFromModel,
@@ -13,27 +12,11 @@ import {
 import { htmlToText, extractPanels, hasUnsafeScrapeMarker, sanitizeNovelText, cleanScrapedChapter } from "@/lib/studio/extract";
 import { containsHan, fetchWtrChapter, parseWtrChapterUrl } from "@/lib/studio/wtr";
 import { assertJobId, jobResourcePath, parseJobStatus, readJobId, type JobSnapshot } from "@/lib/studio/jobs";
-import { composeLook, parseStudioAction, type StudioAction } from "@/lib/studio/bible";
-import type { Character, Scene, Seo } from "@/lib/studio/model";
+import { parseStudioAction, type StudioAction } from "@/lib/studio/bible";
+import type { ImageModel } from "@/lib/studio/model";
 import { jobPacketV2Schema, VOICE_BY_LANGUAGE } from "@/lib/studio/schema";
 import { workerEndpoint } from "@/lib/studio/worker";
-
-type Direction = {
-  title: string;
-  hook: string;
-  logline: string;
-  timeline: string[];
-  characters: Character[];
-  scenes: Scene[];
-  narration: string;
-  seo: Seo;
-};
-
-function clip(text: string, max: number): string {
-  const clean = text.replace(/\s+/g, " ").trim();
-  if (clean.length <= max) return clean;
-  return `${clean.slice(0, max - 1).trimEnd()}…`;
-}
+import { deterministicDirection, parseDirection, type Direction } from "@/lib/studio/director";
 
 async function geminiText(
   apiKey: string,
@@ -251,7 +234,7 @@ export const directChapter = createServerFn({ method: "POST" })
     const lock = typeof row.lock === "string" ? row.lock.trim().slice(0, 1800) : "";
     return { text, lock, session: readSession(input) };
   })
-  .handler(async ({ data }): Promise<{ ok: true; direction: Direction; via: "cloud" | "local" } | { ok: false; error: string }> => {
+  .handler(async ({ data }): Promise<{ ok: true; direction: Direction; via: "cloud" | "local"; recovered?: boolean } | { ok: false; error: string }> => {
     const system = directorSystem(data.session.language);
     const lock = data.lock ? `CHARACTER LOCK. Use these looks in every imagePrompt. Do not narrate this lock as extra scenes.\n${data.lock}\n\n` : "";
     const user = containsHan(data.text)
@@ -261,6 +244,21 @@ export const directChapter = createServerFn({ method: "POST" })
     if (!result.ok) return result;
     let via: "cloud" | "local" = result.via;
     let direction = parseDirection(result.text);
+    let recovered = false;
+    if (!direction) {
+      const repair = await callActiveAI(
+        data.session,
+        `${system} Return a strict JSON object with title, hook, logline, timeline, characters, scenes, narration, seo. Repair this response without inventing source events.`,
+        `Source chapter:\n${data.text}\n\nMalformed plan to repair:\n${result.text.slice(0, 6000)}`,
+      );
+      if (repair.ok) {
+        direction = parseDirection(repair.text);
+        if (direction) {
+          via = repair.via;
+          recovered = true;
+        }
+      }
+    }
     if (direction && containsHan(`${direction.narration}\n${direction.hook}\n${direction.scenes.map((scene) => `${scene.caption} ${scene.dialogue}`).join("\n")}`)) {
       const retry = await callActiveAI(
         data.session,
@@ -272,12 +270,17 @@ export const directChapter = createServerFn({ method: "POST" })
         if (again) {
           direction = again;
           via = retry.via;
+          recovered = true;
         }
       }
     }
-    if (!direction) return { ok: false, error: "The director returned a plan this studio could not read." };
-    const spoken = `${direction.narration}\n${direction.hook}\n${direction.scenes.map((scene) => `${scene.caption} ${scene.dialogue}`).join("\n")}`;
-    if (containsHan(spoken)) return { ok: false, error: "The script still had Chinese in it. Run the director again." };
+    if (
+      !direction ||
+      containsHan(`${direction.narration}\n${direction.hook}\n${direction.scenes.map((scene) => `${scene.caption} ${scene.dialogue}`).join("\n")}`)
+    ) {
+      direction = deterministicDirection(data.text);
+      recovered = true;
+    }
     if (!direction.narration) {
       direction.narration = [direction.hook, ...direction.scenes.map((scene) => [scene.caption, scene.dialogue].filter(Boolean).join(" "))]
         .filter(Boolean)
@@ -285,7 +288,7 @@ export const directChapter = createServerFn({ method: "POST" })
         .replace(/\s+/g, " ")
         .trim();
     }
-    return { ok: true, direction, via };
+    return { ok: true, direction, via, ...(recovered ? { recovered: true } : {}) };
   });
 
 export const writeBeatPrompt = createServerFn({ method: "POST" })
@@ -340,58 +343,158 @@ export const writeBeatPrompt = createServerFn({ method: "POST" })
     return { ok: true, prompt };
   });
 
-function referenceParts(value: unknown): { reference: string; referenceBase64: string } {
-  if (typeof value !== "string") return { reference: "", referenceBase64: "" };
+function referenceParts(value: unknown): { reference: string; referenceBase64: string; referenceMime: string } {
+  if (typeof value !== "string") return { reference: "", referenceBase64: "", referenceMime: "image/png" };
   const raw = value.trim();
-  if (/^https:\/\//i.test(raw)) return { reference: raw.slice(0, 2000), referenceBase64: "" };
-  const match = raw.match(/^data:[^;,]+;base64,([a-z0-9+/=\s]+)$/i);
-  if (!match?.[1]) return { reference: "", referenceBase64: "" };
-  const data = match[1].replace(/\s/g, "");
-  if (data.length < 80 || data.length > 900_000) return { reference: "", referenceBase64: "" };
-  return { reference: "", referenceBase64: data };
+  if (/^https:\/\//i.test(raw)) return { reference: raw.slice(0, 2000), referenceBase64: "", referenceMime: "image/png" };
+  const match = raw.match(/^data:([^;,]+);base64,([a-z0-9+/=\s]+)$/i);
+  if (!match?.[1] || !match[2]) return { reference: "", referenceBase64: "", referenceMime: "image/png" };
+  const data = match[2].replace(/\s/g, "");
+  if (data.length < 80 || data.length > 900_000) return { reference: "", referenceBase64: "", referenceMime: "image/png" };
+  return { reference: "", referenceBase64: data, referenceMime: match[1] };
 }
 
 export const paintPanel = createServerFn({ method: "POST" })
   .validator((input: unknown) => {
-    const row = input as { prompt?: unknown; reference?: unknown; repo?: unknown };
+    const row = input as {
+      prompt?: unknown;
+      reference?: unknown;
+      repo?: unknown;
+      imageModel?: unknown;
+      imageApiKey?: unknown;
+      hfToken?: unknown;
+      aspect?: unknown;
+    };
     const prompt = typeof row?.prompt === "string" ? row.prompt.trim() : "";
     if (prompt.length < 8) throw new Error("That panel has no picture note.");
     const repo = typeof row.repo === "string" ? row.repo.trim().slice(0, 200) : "";
-    return { prompt: prompt.slice(0, 900), repo, ...referenceParts(row.reference), session: readSession(input) };
+    const supported: ImageModel[] = ["nano-banana", "nano-banana-pro", "colab-painter", "hf-flux-schnell"];
+    const imageModel = supported.includes(row.imageModel as ImageModel) ? (row.imageModel as ImageModel) : "nano-banana";
+    const imageApiKey = typeof row.imageApiKey === "string" ? row.imageApiKey.trim().slice(0, 500) : "";
+    const hfToken = typeof row.hfToken === "string" ? row.hfToken.trim().slice(0, 500) : "";
+    const aspect = row.aspect === "16:9" ? "16:9" : "9:16";
+    return {
+      prompt: prompt.slice(0, 900),
+      repo,
+      imageModel,
+      imageApiKey,
+      hfToken,
+      aspect,
+      ...referenceParts(row.reference),
+      session: readSession(input),
+    };
   })
   .handler(async ({ data }): Promise<{ ok: true; url: string; fallback?: boolean; engine?: string } | { ok: false; error: string }> => {
-    const painted = `Vertical colored manhwa, clean ink, dramatic lighting, consistent character, no text, no letters, no watermark, no speech bubbles. ${data.prompt}`;
-    const paintWorker = async () => {
+    const framing = data.aspect === "16:9" ? "Wide horizontal 16:9" : "Vertical 9:16";
+    const painted = `${framing} colored manhwa panel, clean ink, dramatic lighting, consistent character, no text, no letters, no watermark, no speech bubbles. ${data.prompt}`;
+    if (data.imageModel === "colab-painter") {
       const result = await workerPost("/api/v1/paint", data.session.workerUrl, data.session.workerToken, {
         prompt: painted,
         negative: "text, letters, logos, watermark, speech bubbles",
         reference: data.reference,
         referenceBase64: data.referenceBase64,
         repo: data.repo,
+        aspect: data.aspect,
       });
       if (!result.ok) return result;
       const row = result.json && typeof result.json === "object" ? (result.json as Record<string, unknown>) : {};
-      const fallback = row.fallback === true || row.engine === "pollinations" || row.engine === "ink";
       const engine = typeof row.engine === "string" ? row.engine.slice(0, 40) : "";
-      if (typeof row.url === "string" && row.url) return { ok: true as const, url: row.url, ...(fallback ? { fallback: true } : {}), ...(engine ? { engine } : {}) };
+      if (row.fallback === true || engine === "pollinations" || engine === "ink") {
+        return { ok: false as const, error: "The worker returned a non-GPU fallback image. Check the Colab painter before retrying." };
+      }
+      if (typeof row.url === "string" && row.url) return { ok: true as const, url: row.url, ...(engine ? { engine } : {}) };
       if (typeof row.imageBase64 === "string" && row.imageBase64) {
         const mime = typeof row.mimeType === "string" ? row.mimeType : "image/png";
-        return { ok: true as const, url: `data:${mime};base64,${row.imageBase64}`, ...(fallback ? { fallback: true } : {}), ...(engine ? { engine } : {}) };
+        return { ok: true as const, url: `data:${mime};base64,${row.imageBase64}`, ...(engine ? { engine } : {}) };
       }
-      return { ok: false as const, error: "The worker returned no image." };
-    };
-    const route = imageVia(data.session.duty, Boolean(data.session.workerUrl.trim()));
-    if (route === "worker") {
-      const drawn = await paintWorker();
-      if (drawn.ok) return drawn;
+      return { ok: false as const, error: "The Colab painter returned no image." };
     }
-    const prompt = encodeURIComponent(painted.slice(0, 480));
-    return {
-      ok: true,
-      fallback: true,
-      engine: "pollinations",
-      url: `https://image.pollinations.ai/prompt/${prompt}?width=768&height=1152&nologo=true&model=flux`,
-    };
+
+    if (data.imageModel === "nano-banana" || data.imageModel === "nano-banana-pro") {
+      const apiKey = data.imageApiKey || (data.session.provider === "gemini" ? data.session.apiKey : "");
+      if (!apiKey) return { ok: false, error: "Add a Gemini API key in Settings to use Nano Banana." };
+      const reference = data.referenceBase64
+        ? { data: data.referenceBase64, mime: data.referenceMime }
+        : data.reference
+          ? await imageBytes(data.reference)
+          : null;
+      if (data.reference && !reference) return { ok: false, error: "The locked reference image could not be loaded." };
+      const endpointModel = data.imageModel === "nano-banana" ? "gemini-2.0-flash-exp-image-generation" : "imagen-3.0-generate-002";
+      const endpoint =
+        data.imageModel === "nano-banana"
+          ? `https://generativelanguage.googleapis.com/v1beta/models/${endpointModel}:generateContent`
+          : `https://generativelanguage.googleapis.com/v1beta/models/${endpointModel}:predict`;
+      let response: Response;
+      try {
+        response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+          signal: AbortSignal.timeout(90000),
+          body: JSON.stringify(
+            data.imageModel === "nano-banana"
+              ? {
+                  contents: [
+                    {
+                      role: "user",
+                      parts: [
+                        { text: `${painted}\nMatch the attached approved character/location reference closely.` },
+                        ...(reference ? [{ inlineData: { mimeType: reference.mime, data: reference.data } }] : []),
+                      ],
+                    },
+                  ],
+                  generationConfig: { responseModalities: ["TEXT", "IMAGE"], imageConfig: { aspectRatio: data.aspect } },
+                }
+              : {
+                  instances: [{ prompt: `${painted}\nAspect ratio ${data.aspect}. Match the approved character description.` }],
+                  parameters: { sampleCount: 1, aspectRatio: data.aspect },
+                },
+          ),
+        });
+      } catch {
+        return { ok: false, error: "Gemini image generation did not answer." };
+      }
+      const raw = await response.text();
+      if (!response.ok) return { ok: false, error: `Gemini image generation returned ${response.status}.` };
+      let payload: {
+        candidates?: { content?: { parts?: { inlineData?: { data?: string; mimeType?: string }; text?: string }[] } }[];
+        predictions?: { bytesBase64Encoded?: string; mimeType?: string }[];
+      };
+      try {
+        payload = JSON.parse(raw) as typeof payload;
+      } catch {
+        return { ok: false, error: "Gemini returned an unreadable image response." };
+      }
+      const inline = payload.candidates?.[0]?.content?.parts?.find((part) => part.inlineData?.data)?.inlineData;
+      const prediction = payload.predictions?.find((item) => item.bytesBase64Encoded);
+      const image = inline?.data || prediction?.bytesBase64Encoded || "";
+      if (!image) return { ok: false, error: "Gemini returned no image. Check the selected model and API access." };
+      const mime = inline?.mimeType || prediction?.mimeType || "image/png";
+      return { ok: true, url: `data:${mime};base64,${image}`, engine: endpointModel };
+    }
+
+    const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "image/*, application/json" };
+    if (data.hfToken) headers.Authorization = `Bearer ${data.hfToken}`;
+    headers["X-Wait-For-Model"] = "true";
+    let response: Response;
+    try {
+      response = await fetch("https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell", {
+        method: "POST",
+        headers,
+        signal: AbortSignal.timeout(90000),
+        body: JSON.stringify({ inputs: painted, parameters: { width: data.aspect === "16:9" ? 1024 : 576, height: data.aspect === "16:9" ? 576 : 1024 } }),
+      });
+    } catch {
+      return { ok: false, error: "Hugging Face image inference did not answer." };
+    }
+    if (!response.ok) {
+      const hint = response.status === 503 ? " The model is loading; retry in a moment." : "";
+      return { ok: false, error: `Hugging Face inference returned ${response.status}.${hint}` };
+    }
+    const mime = (response.headers.get("content-type") || "image/png").split(";")[0] || "image/png";
+    if (!mime.startsWith("image/")) return { ok: false, error: "Hugging Face returned a non-image response. Check its inference access." };
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length < 1000 || bytes.length > 12_000_000) return { ok: false, error: "Hugging Face returned an empty or oversized image." };
+    return { ok: true, url: `data:${mime};base64,${bytes.toString("base64")}`, engine: "flux.1-schnell" };
   });
 
 export const speakLine = createServerFn({ method: "POST" })
@@ -497,87 +600,6 @@ function speechChunks(text: string): string[] {
     rest = rest.slice(piece ? cut + 1 : 700).trim();
   }
   return parts;
-}
-
-function asText(value: unknown, max: number): string {
-  return typeof value === "string" ? clip(value, max) : "";
-}
-
-function parseDirection(raw: string): Direction | null {
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
-  let data: unknown;
-  try {
-    data = JSON.parse(raw.slice(start, end + 1));
-  } catch {
-    return null;
-  }
-  if (!data || typeof data !== "object") return null;
-  const row = data as Record<string, unknown>;
-  const characters = Array.isArray(row.characters) ? row.characters : [];
-  const scenes = Array.isArray(row.scenes) ? row.scenes : [];
-  const cast: Character[] = [];
-  for (const item of characters.slice(0, 12)) {
-    if (!item || typeof item !== "object") continue;
-    const character = item as Record<string, unknown>;
-    const name = asText(character.name, 40);
-    if (!name) continue;
-    const look = asText(character.look, 280) || asText(character.vessel, 280);
-    const rowCast: Character = {
-      id: asText(character.id, 32) || name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-      name,
-      soul: asText(character.soul, 280) || "Identity stays with this name.",
-      vessel: asText(character.vessel, 280) || "Body not stated.",
-      look,
-      face: asText(character.face, 180),
-      hair: asText(character.hair, 180),
-      age: asText(character.age, 40),
-      scars: asText(character.scars, 180),
-      eyes: asText(character.eyes, 80),
-      body: asText(character.body, 180),
-      outfit: asText(character.outfit, 180),
-    };
-    rowCast.look = composeLook(rowCast) || look;
-    rowCast.vessel = rowCast.outfit || rowCast.vessel;
-    cast.push(rowCast);
-  }
-  const panels: Scene[] = [];
-  for (const [index, item] of scenes.entries()) {
-    if (!item || typeof item !== "object") continue;
-    const scene = item as Record<string, unknown>;
-    const caption = asText(scene.caption, 240);
-    const dialogue = asText(scene.dialogue, 180);
-    if (!caption && !dialogue) continue;
-    panels.push({
-      id: `s${index + 1}`,
-      caption,
-      dialogue,
-      speaker: asText(scene.speaker, 40),
-      sfx: asText(scene.sfx, 16).toUpperCase(),
-      state: asText(scene.state, 160),
-      imagePrompt: "",
-      imageUrl: null,
-      promptLocked: false,
-    });
-  }
-  if (!panels.length) return null;
-  const seoRaw = row.seo && typeof row.seo === "object" ? (row.seo as Record<string, unknown>) : {};
-  const tags = Array.isArray(seoRaw.tags) ? seoRaw.tags.filter((tag) => typeof tag === "string").slice(0, 8) : [];
-  return {
-    title: asText(row.title, 80) || "Untitled chapter",
-    hook: asText(row.hook, 320),
-    logline: asText(row.logline, 200),
-    timeline: Array.isArray(row.timeline) ? row.timeline.filter((note) => typeof note === "string") : [],
-    characters: cast,
-    scenes: panels,
-    narration: asText(row.narration, 20000),
-    seo: {
-      title: asText(seoRaw.title, 100) || asText(row.title, 80),
-      description: asText(seoRaw.description, 220),
-      tags: tags as string[],
-    },
-  };
 }
 
 function blockedIp(ip: string): boolean {
@@ -940,7 +962,7 @@ export const submitJob = createServerFn({ method: "POST" })
     const packet = jobPacketV2Schema.parse(row?.packet);
     return { href: target.toString(), hostname: target.hostname, token, packet };
   })
-  .handler(async ({ data }): Promise<{ ok: true; status: number; body: string; jobId: string | null } | { ok: false; error: string }> => {
+  .handler(async ({ data }): Promise<{ ok: true; status: number; body: string; jobId: string } | { ok: false; error: string }> => {
     const blocked = await assertPublic(data.hostname);
     if (blocked) return { ok: false, error: blocked };
     let res: Response;
@@ -962,7 +984,11 @@ export const submitJob = createServerFn({ method: "POST" })
     if (res.status >= 300 && res.status < 400) return { ok: false, error: "The worker redirected. The job was not sent." };
     const body = await res.text();
     if (!res.ok) return { ok: false, error: `Worker returned ${res.status}.` };
-    return { ok: true, status: res.status, body, jobId: readJobId(body) };
+    const location = res.headers.get("location") || "";
+    const locationId = location.match(/\/api\/v1\/jobs\/([A-Za-z0-9._-]{1,80})\/?$/)?.[1] || "";
+    const jobId = readJobId(body) || (locationId ? assertJobId(locationId) : null);
+    if (!jobId) return { ok: false, error: "The worker accepted the render without a trackable job id. Check its /api/v1/jobs response." };
+    return { ok: true, status: res.status, body, jobId };
   });
 
 async function workerGet(
@@ -1248,19 +1274,19 @@ export const chatTurn = createServerFn({ method: "POST" })
     const message = typeof row.message === "string" ? row.message.trim() : "";
     if (message.length < 1) throw new Error("Type a message.");
     if (message.length > 2000) throw new Error("That message is too long.");
-    const context = typeof row.context === "string" ? row.context.slice(0, 4000) : "";
+    const context = typeof row.context === "string" ? row.context.slice(0, 120000) : "";
     return { message, context, session: readSession(input) };
   })
   .handler(async ({ data }): Promise<{ ok: true; reply: string; action: StudioAction | null } | { ok: false; error: string }> => {
     const system = [
-      "You are the assistant inside a manhua explanation studio.",
+      "You are the Universal Studio Agent inside Aether Studio. You can inspect the complete live state included in the Project context and perform allowed app actions.",
       "Answer in the same language the user wrote.",
       "If they ask to change English/Hindi voiceover, tell them Re-voice only changes the spoken script, audio, captions, and YouTube text. It does not redraw pictures.",
-      "Do not claim you generated an image unless the user already said a panel was painted.",
-      "When the user corrects one character's look, end with a single line: ACTION {\"type\":\"look\",\"name\":\"Exact Name\",\"face\":\"\",\"hair\":\"\",\"age\":\"\",\"scars\":\"\",\"eyes\":\"\",\"body\":\"\",\"outfit\":\"\",\"chapter\":0}",
-      "Include only the fields they changed. chapter is 0 unless they named a chapter for an outfit change.",
-      "When the user corrects one spoken line, end with: ACTION {\"type\":\"line\",\"id\":\"s1\",\"text\":\"the new spoken line only\"}",
-      "Use the beat id from the project context. If they are only asking a question, do not add an ACTION line.",
+      "Never claim an action happened unless you emit its command. Emit at most one command as the final line, exactly ACTION followed by one JSON object. If a request needs multiple actions, choose the most important one and explain.",
+      "Allowed commands: {\"tool\":\"update_scene\",\"sceneId\":\"s1\",\"caption\":\"optional\",\"prompt\":\"optional\",\"dialogue\":\"optional\"}; {\"tool\":\"add_or_update_character\",\"name\":\"Exact Name\",\"look\":\"optional full look\",\"starLocked\":true}; {\"tool\":\"split_script_into_scenes\"}; {\"tool\":\"switch_language\",\"language\":\"hi\"}; {\"tool\":\"switch_language\",\"language\":\"en\"}; {\"tool\":\"trigger_batch_paint\"}; {\"tool\":\"start_worker_render\"}.",
+      "Use exact scene ids and character names from Project context. For language commands set only hi or en. Do not invent ids.",
+      "For look changes or simple line changes you may also use legacy commands {\"type\":\"look\",\"name\":\"Exact Name\",\"face\":\"optional\",\"hair\":\"optional\",\"age\":\"optional\",\"scars\":\"optional\",\"eyes\":\"optional\",\"body\":\"optional\",\"outfit\":\"optional\",\"chapter\":0} and {\"type\":\"line\",\"id\":\"s1\",\"text\":\"new line\"}.",
+      "Do not claim you generated an image unless the user already said a panel was painted. If the user is only asking a question, do not add an ACTION line.",
     ].join(" ");
     const result = await callActiveAI(data.session, system, data.context ? `Project:\n${data.context}\n\nUser:\n${data.message}` : data.message);
     if (!result.ok) return result;

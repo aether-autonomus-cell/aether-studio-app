@@ -1,4 +1,4 @@
-import type { Character, Scene } from "./model.ts";
+import type { Character, LocationReference, Scene } from "./model.ts";
 
 export type OutfitChange = { chapter: number; outfit: string };
 
@@ -71,6 +71,13 @@ export function outfitsToText(rows: OutfitChange[] | undefined): string {
   return (rows ?? []).map((row) => `${row.chapter}: ${row.outfit}`).join("\n");
 }
 
+export function locationMatches(text: string, name: string): boolean {
+  const blob = text.toLowerCase();
+  const normalized = name.toLowerCase().trim();
+  if (!normalized) return false;
+  return blob.includes(normalized) || normalized.split(/\s+/).some((part) => part.length >= 5 && blob.includes(part));
+}
+
 export function applyChatLook(character: Character, reply: string): Character {
   const next: Character = { ...character, outfits: character.outfits ? [...character.outfits] : [] };
   let labeled = false;
@@ -107,24 +114,38 @@ export function beatsNeedingPrompt(scenes: Pick<Scene, "id" | "locked" | "prompt
 export function lookLockForScene(
   scene: Pick<Scene, "caption" | "dialogue" | "speaker" | "imagePrompt" | "chapter">,
   characters: Character[],
+  locations: LocationReference[] = [],
 ): string {
   const blob = [scene.caption, scene.dialogue, scene.speaker, scene.imagePrompt].join("\n");
   const named = characters.filter((character) => character.name && blob.includes(character.name));
   const rows = (named.length ? named : characters.slice(0, 4)).map(
     (character) => `${character.name}: ${composeLook(character, scene.chapter)}`,
   );
+  for (const location of locations) {
+    if (location.starLocked && locationMatches(blob, location.name)) {
+      rows.push(`Locked location ${location.name}: ${location.description}`);
+    }
+  }
   return rows.filter((row) => !row.endsWith(": ")).join("\n");
 }
 
 export function faceReferenceFor(
   scene: Pick<Scene, "caption" | "dialogue" | "speaker" | "imagePrompt">,
   characters: Character[],
+  locations: LocationReference[] = [],
 ): string {
   const blob = [scene.caption, scene.dialogue, scene.speaker, scene.imagePrompt].join("\n");
+  const pinned = characters.find(
+    (character) => character.starLocked && character.faceUrl && blob.includes(character.name),
+  );
+  if (pinned?.faceUrl) return pinned.faceUrl;
   const named = characters.find((character) => character.faceUrl && character.name && blob.includes(character.name));
   if (named?.faceUrl) return named.faceUrl;
   if (characters.length === 1 && characters[0]?.faceUrl) return characters[0].faceUrl;
-  return "";
+  const location = locations.find(
+    (item) => item.starLocked && item.imageUrl && locationMatches(blob, item.name),
+  );
+  return location?.imageUrl || "";
 }
 
 export type StudioAction =
@@ -140,7 +161,13 @@ export type StudioAction =
       outfit?: string;
       chapter?: number;
     }
-  | { type: "line"; id: string; text: string };
+  | { type: "line"; id: string; text: string }
+  | { type: "update_scene"; sceneId: string; caption?: string; prompt?: string; dialogue?: string }
+  | { type: "add_or_update_character"; name: string; look?: string; starLocked?: boolean }
+  | { type: "split_script_into_scenes" }
+  | { type: "switch_language"; language: "hi" | "en" }
+  | { type: "trigger_batch_paint" }
+  | { type: "start_worker_render" };
 
 const LOOK_KEYS = ["face", "hair", "age", "scars", "eyes", "body", "outfit"] as const;
 
@@ -174,6 +201,37 @@ export function parseStudioAction(raw: string): { reply: string; action: StudioA
   }
   if (!data || typeof data !== "object") return { reply: raw.trim(), action: null };
   const row = data as Record<string, unknown>;
+  const tool = typeof row.tool === "string" ? row.tool : row.type;
+  if (tool === "update_scene") {
+    const sceneId = typeof row.sceneId === "string" ? row.sceneId.trim().slice(0, 40) : "";
+    if (!sceneId) return { reply: reply || raw.trim(), action: null };
+    const action: Extract<StudioAction, { type: "update_scene" }> = { type: "update_scene", sceneId };
+    for (const key of ["caption", "prompt", "dialogue"] as const) {
+      if (typeof row[key] === "string") action[key] = row[key].trim().slice(0, key === "prompt" ? 900 : 400);
+    }
+    if (!action.caption && !action.prompt && !action.dialogue) return { reply: reply || raw.trim(), action: null };
+    return { reply, action };
+  }
+  if (tool === "add_or_update_character") {
+    const name = typeof row.name === "string" ? row.name.trim().slice(0, 40) : "";
+    const look = typeof row.look === "string" ? row.look.trim().slice(0, 280) : "";
+    if (!name || (!look && typeof row.starLocked !== "boolean")) return { reply: reply || raw.trim(), action: null };
+    return {
+      reply,
+      action: {
+        type: "add_or_update_character",
+        name,
+        ...(look ? { look } : {}),
+        ...(typeof row.starLocked === "boolean" ? { starLocked: row.starLocked } : {}),
+      },
+    };
+  }
+  if (tool === "split_script_into_scenes" || tool === "trigger_batch_paint" || tool === "start_worker_render") {
+    return { reply, action: { type: tool } };
+  }
+  if (tool === "switch_language" && (row.language === "hi" || row.language === "en")) {
+    return { reply, action: { type: "switch_language", language: row.language } };
+  }
   if (row.type === "line") {
     const id = typeof row.id === "string" ? row.id.trim().slice(0, 40) : "";
     const text = typeof row.text === "string" ? row.text.trim().slice(0, 400) : "";

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyChatLook, applyLookPatch, beatsNeedingPrompt, bibleDocument, composeLook, gleanCast, outfitAt, parseStudioAction, textToOutfits } from "./bible.ts";
+import { applyChatLook, applyLookPatch, beatsNeedingPrompt, bibleDocument, composeLook, faceReferenceFor, gleanCast, locationMatches, lookLockForScene, outfitAt, parseStudioAction, textToOutfits } from "./bible.ts";
 import { panelHold } from "./timing.ts";
 import type { Character } from "./model.ts";
 
@@ -78,4 +78,24 @@ test("chat can name a look patch or one spoken line", () => {
   assert.equal(line.action?.type, "line");
   if (line.action?.type === "line") assert.equal(line.action.text, "The jade remembered his name.");
   assert.equal(parseStudioAction("Just a question.").action, null);
+});
+
+test("the chat parser accepts the studio's structured state-changing tools", () => {
+  const scene = parseStudioAction('Updated.\nACTION {"tool":"update_scene","sceneId":"s2","prompt":"Close-up of the jade"}');
+  assert.equal(scene.action?.type, "update_scene");
+  if (scene.action?.type === "update_scene") assert.equal(scene.action.prompt, "Close-up of the jade");
+  assert.equal(parseStudioAction('Locked.\nACTION {"tool":"add_or_update_character","name":"Ren","starLocked":true}').action?.type, "add_or_update_character");
+  assert.equal(parseStudioAction('Plan.\nACTION {"tool":"split_script_into_scenes"}').action?.type, "split_script_into_scenes");
+  assert.equal(parseStudioAction('Hindi.\nACTION {"tool":"switch_language","language":"hi"}').action?.type, "switch_language");
+  assert.equal(parseStudioAction('Paint.\nACTION {"tool":"trigger_batch_paint"}').action?.type, "trigger_batch_paint");
+  assert.equal(parseStudioAction('Render.\nACTION {"tool":"start_worker_render"}').action?.type, "start_worker_render");
+});
+
+test("starred characters and locations provide stable prompt and image references", () => {
+  const scene = { caption: "Rain over the bridge", dialogue: "", speaker: "", imagePrompt: "" };
+  const pinned: Character = { ...ren, starLocked: true, faceUrl: "data:image/png;base64,face" };
+  assert.equal(faceReferenceFor(scene, [pinned]), "data:image/png;base64,face");
+  assert.equal(locationMatches("Wide view of Old Bridge", "Old Bridge"), true);
+  const location = { id: "bridge", name: "Old Bridge", description: "Rain and paper lanterns.", starLocked: true };
+  assert.match(lookLockForScene(scene, [], [location]), /Locked location Old Bridge/);
 });

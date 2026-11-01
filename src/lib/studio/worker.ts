@@ -3,6 +3,7 @@ const COMPAT_PATHS = ["/api/generate", "/extract", "/tts", "/render", "/health",
 export type WorkerPath =
   | "/api/v1/health"
   | "/api/v1/jobs"
+  | `/api/v1/jobs/${string}`
   | "/api/v1/direct"
   | "/api/v1/paint"
   | "/api/v1/speak"
@@ -11,7 +12,11 @@ export type WorkerPath =
   | "/api/v1/preview.mp4"
   | "/api/v1/check"
   | "/api/v1/fetch"
+  | `/api/v1/fetch/${string}`
   | "/api/v1/ocr"
+  | `/api/v1/voices/${string}`
+  | "/api/v1/masters/en.mp4"
+  | "/api/v1/masters/hi.mp4"
   | (typeof COMPAT_PATHS)[number];
 
 export function workerEndpoint(raw: string, path: string): URL {
