@@ -1,6 +1,8 @@
 /** Safety stop so a mistyped end chapter cannot request thousands of pages. The old 40 cap is gone. */
 export const CHAPTER_PULL_CAP = 2000;
 
+export const MAX_SCRIPT_CHARS = 30_000;
+
 export const CHUNK_CHARS = 8000;
 
 export function expandChapterUrls(template: string, start: number, end: number): string[] {

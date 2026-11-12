@@ -69,7 +69,7 @@ import {
   type Project,
   type Scene,
 } from "@/lib/studio/model";
-import { chunkChapterText, expandChapterUrls } from "@/lib/studio/range";
+import { chunkChapterText, expandChapterUrls, MAX_SCRIPT_CHARS } from "@/lib/studio/range";
 import { containsHan } from "@/lib/studio/wtr";
 import { workerEndpoint } from "@/lib/studio/worker";
 import { loadProject, saveProject } from "@/lib/studio/persist";
@@ -812,6 +812,10 @@ export function StudioApp() {
   }
 
   async function directText(cleaned: string, lock = bible): Promise<boolean> {
+    if (cleaned.length > MAX_SCRIPT_CHARS) {
+      setError(`Keep the chapter under ${MAX_SCRIPT_CHARS.toLocaleString()} characters.`);
+      return false;
+    }
     const chunks = chunkChapterText(cleaned);
     if (!chunks.length) {
       setError("Paste at least a short chapter.");
@@ -2085,6 +2089,7 @@ export function StudioApp() {
               <span className="text-sm font-medium text-paper">Chapter script</span>
               <textarea
                 value={draft}
+                maxLength={MAX_SCRIPT_CHARS}
                 onChange={(event) => setDraft(event.target.value)}
                 onPaste={(event) => {
                   const pasted = event.clipboardData.getData("text");
@@ -2415,7 +2420,7 @@ export function StudioApp() {
             >
               <label className="min-w-0 flex-1" htmlFor="chat-draft">
                 <span className="sr-only">Message</span>
-                <input id="chat-draft" value={chatDraft} onChange={(event) => setChatDraft(event.target.value)} placeholder="The scar is on the left cheek" className="field min-h-12 w-full rounded-xl px-3 text-base outline-none" />
+                <textarea id="chat-draft" value={chatDraft} maxLength={MAX_SCRIPT_CHARS} onChange={(event) => setChatDraft(event.target.value)} placeholder="Ask a question or paste up to 30,000 characters" rows={3} className="field min-h-20 w-full resize-y rounded-xl px-3 py-2 text-base outline-none" />
               </label>
               <button type="submit" disabled={!!busy || !chatDraft.trim()} className="min-h-12 rounded-xl bg-seal px-4 text-sm font-semibold text-paper disabled:opacity-50">
                 Send

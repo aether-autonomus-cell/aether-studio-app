@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cloudRequest, imageVia, readSession, shouldFailover, textFromModel, textVia } from "./ai-router.ts";
+import { cloudRequest, imageVia, readSession, shouldFailover, shouldFailoverWorker, textFromModel, textVia } from "./ai-router.ts";
 
 const blank = {
   provider: "zai" as const,
@@ -37,6 +37,14 @@ test("rate limit, quota, and any HTTP error fail over to local", () => {
   assert.equal(shouldFailover(500, "boom"), true);
   assert.equal(shouldFailover(0, "timeout"), true);
   assert.equal(shouldFailover(200, "OK"), false);
+});
+
+test("worker availability errors may fail over to a configured cloud key", () => {
+  assert.equal(shouldFailoverWorker("Worker returned 500."), true);
+  assert.equal(shouldFailoverWorker("Worker returned 502."), true);
+  assert.equal(shouldFailoverWorker("The worker did not answer."), true);
+  assert.equal(shouldFailoverWorker("That worker URL is not valid."), false);
+  assert.equal(shouldFailoverWorker("The worker is blocked because its address is private."), false);
 });
 
 test("session reading keeps a worker-only call off the cloud key", () => {

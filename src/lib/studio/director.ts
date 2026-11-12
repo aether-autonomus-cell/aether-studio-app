@@ -1,4 +1,4 @@
-import { composeLook } from "./bible.ts";
+import { composeLook, gleanCast } from "./bible.ts";
 import { cutChapter, type Character, type Project, type Scene, type Seo } from "./model.ts";
 
 export type Direction = {
@@ -137,13 +137,62 @@ export function parseDirection(raw: string): Direction | null {
 
 export function deterministicDirection(raw: string): Direction {
   const project: Project = cutChapter(raw);
+  const cast = gleanCast(project.text, project.characters);
+  const paragraphs = project.text
+    .split(/\n+/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+  if (paragraphs[0] === project.title) paragraphs.shift();
+
+  const beats: { text: string; speaker: string }[] = [];
+  for (const paragraph of paragraphs) {
+    const spoken = paragraph.match(/^([^:\n]{1,32}):\s+([\s\S]+)$/);
+    const speaker = spoken?.[1]?.trim() ?? "";
+    const body = spoken?.[2]?.trim() ?? paragraph;
+    const sentences = body.match(/[^.!?]+[.!?]+|[^.!?]+$/g) ?? [body];
+    let words: string[] = [];
+    const flush = () => {
+      if (!words.length) return;
+      beats.push({ text: words.join(" "), speaker });
+      words = [];
+    };
+    for (const sentence of sentences) {
+      const sentenceWords = sentence.trim().split(/\s+/).filter(Boolean);
+      for (const word of sentenceWords) {
+        words.push(word);
+        if (words.length >= 20) flush();
+      }
+    }
+    flush();
+  }
+
+  const angles = ["medium shot", "close-up", "wide establishing shot", "over-the-shoulder shot"];
+  const scenes: Scene[] = beats.slice(0, 300).map((beat, index) => {
+    const subject = cast.find((character) => character.name === beat.speaker);
+    const look = subject ? ` Character continuity: ${subject.name}, ${composeLook(subject)}.` : "";
+    const caption = beat.speaker ? "" : beat.text;
+    const dialogue = beat.speaker ? beat.text : "";
+    const angle = angles[index % angles.length] ?? "medium shot";
+    return {
+      id: `s${index + 1}`,
+      caption,
+      dialogue,
+      speaker: beat.speaker,
+      sfx: "",
+      state: beat.text.slice(0, 160),
+      imagePrompt: `Vertical manhwa panel, ${angle}, clear foreground and background depth, expressive character posing, cinematic lighting and detailed environment. Depict only the described beat: ${beat.text}.${look} Keep character design consistent. No lettering, captions, logos, or speech bubbles.`,
+      imageUrl: null,
+      promptLocked: false,
+    };
+  });
+
   return {
     title: project.title,
     hook: project.logline,
     logline: project.logline,
-    timeline: project.timeline,
-    characters: project.characters,
-    scenes: project.scenes,
+    timeline: scenes.map((scene, index) => `Panel ${index + 1}: ${scene.state}`),
+    characters: cast,
+    scenes: scenes.length ? scenes : project.scenes,
     narration: project.narration,
     seo: project.seo,
   };

@@ -223,6 +223,10 @@ export function shouldFailover(status: number, body: string): boolean {
   return /quota|rate limit|resource exhausted|insufficient|billing|timeout|too many requests/i.test(body);
 }
 
+export function shouldFailoverWorker(error: string): boolean {
+  return /worker (?:returned (?:404|500|502|503)|did not answer|redirected)/i.test(error);
+}
+
 /** Default when both are connected: the key writes. The user can flip this in Settings. */
 export function textVia(duty: Duty, hasKey: boolean, hasWorker: boolean): "key" | "worker" | "none" {
   if (duty === "worker") {

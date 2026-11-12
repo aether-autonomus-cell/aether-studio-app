@@ -22,3 +22,19 @@ test("deterministic recovery always returns scenes and a cast from readable sour
   assert.ok(direction.scenes.length >= 2);
   assert.ok(direction.characters.some((character) => character.name === "Ren"));
 });
+
+test("deterministic recovery creates compact beats and complete visual prompts", () => {
+  const direction = deterministicDirection(
+    `Lantern Debt
+
+${"Ren crossed the rain-soaked bridge while Shao watched from beneath the cedar trees. ".repeat(9)}`,
+  );
+  assert.ok(direction.scenes.length > 1);
+  assert.ok(direction.scenes.every((scene) => {
+    const text = [scene.caption, scene.dialogue].filter(Boolean).join(" ");
+    const words = text.split(/\s+/).filter(Boolean).length;
+    return words <= 25 && scene.imagePrompt.includes("Depict only the described beat:");
+  }));
+  assert.ok(direction.characters.some((character) => character.name === "Ren"));
+  assert.ok(direction.characters.some((character) => character.name === "Shao"));
+});

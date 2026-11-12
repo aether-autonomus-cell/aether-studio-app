@@ -49,7 +49,11 @@ export function chooseVoice(voices: SpeechSynthesisVoice[], sample: string): Spe
   const hindi = /[\u0900-\u097F]/.test(sample);
   const expectedName = hindi ? /madhur/i : /christopher/i;
   const expectedLocale = hindi ? /^hi(?:-|$)/i : /^en-US(?:-|$)/i;
-  return voices.find((voice) => expectedName.test(voice.name) && expectedLocale.test(voice.lang)) ?? null;
+  return (
+    voices.find((voice) => expectedName.test(voice.name) && expectedLocale.test(voice.lang)) ??
+    voices.find((voice) => expectedLocale.test(voice.lang)) ??
+    null
+  );
 }
 
 export function pickMaleVoice(): SpeechSynthesisVoice | null {
@@ -81,11 +85,6 @@ export function speakOnDevice(text: string, voice: SpeechSynthesisVoice | null):
     return Promise.reject(new Error("This phone has no speech engine."));
   }
   const hindi = /[\u0900-\u097F]/.test(text);
-  const expectedName = hindi ? /madhur/i : /christopher/i;
-  const expectedLocale = hindi ? /^hi(?:-|$)/i : /^en-US(?:-|$)/i;
-  if (!voice || !expectedName.test(voice.name) || !expectedLocale.test(voice.lang)) {
-    return Promise.reject(new Error("The requested male voice is not installed on this phone."));
-  }
   const pieces = speechChunks(text);
   if (!pieces.length) return Promise.resolve();
   const synth = window.speechSynthesis;
@@ -104,8 +103,8 @@ export function speakOnDevice(text: string, voice: SpeechSynthesisVoice | null):
     };
     const speakPiece = () => {
       const utterance = new SpeechSynthesisUtterance(pieces[index] ?? "");
-      utterance.voice = voice;
-      utterance.lang = voice.lang;
+      if (voice) utterance.voice = voice;
+      utterance.lang = voice?.lang || (hindi ? "hi-IN" : "en-US");
       utterance.rate = 0.96;
       utterance.onend = () => {
         index += 1;

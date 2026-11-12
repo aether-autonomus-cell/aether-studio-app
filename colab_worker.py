@@ -665,7 +665,11 @@ async def llm(request: Request):
         raise HTTPException(401, "token")
     payload = await request.json()
     mode = payload.get("model_mode") or "gguf"
-    text = complete(mode, payload.get("system") or "", payload.get("prompt") or "")
+    try:
+        text = complete(mode, payload.get("system") or "", payload.get("prompt") or "")
+    except Exception as exc:
+        print("Local model unavailable", type(exc).__name__, str(exc)[:180], flush=True)
+        raise HTTPException(503, "Local model unavailable; retry or use a configured cloud provider.") from exc
     return {"text": text, "model": LLM.get("name"), "mode": mode}
 
 @app.post("/api/v1/direct")

@@ -5,6 +5,7 @@ import {
   directorSystem,
   readSession,
   shouldFailover,
+  shouldFailoverWorker,
   textFromModel,
   textVia,
   type AiSession,
@@ -17,6 +18,7 @@ import type { ImageModel } from "@/lib/studio/model";
 import { jobPacketV2Schema, VOICE_BY_LANGUAGE } from "@/lib/studio/schema";
 import { workerEndpoint } from "@/lib/studio/worker";
 import { deterministicDirection, parseDirection, type Direction } from "@/lib/studio/director";
+import { MAX_SCRIPT_CHARS } from "@/lib/studio/range";
 
 async function geminiText(
   apiKey: string,
@@ -139,6 +141,11 @@ export async function callActiveAI(
   if (via === "worker") {
     const local = await callLocal(session, system, user);
     if (local.ok) return { ok: true, text: local.text, via: "local" };
+    if (session.apiKey.trim() && shouldFailoverWorker(local.error)) {
+      const cloud = await callCloud(session, system, user, true);
+      if (cloud.ok) return { ok: true, text: cloud.text, via: "cloud" };
+      return { ok: false, error: cloud.error };
+    }
     return { ok: false, error: local.error };
   }
   const cloud = await callCloud(session, system, user, true);
@@ -1273,7 +1280,7 @@ export const chatTurn = createServerFn({ method: "POST" })
     const row = input as { message?: unknown; context?: unknown };
     const message = typeof row.message === "string" ? row.message.trim() : "";
     if (message.length < 1) throw new Error("Type a message.");
-    if (message.length > 2000) throw new Error("That message is too long.");
+    if (message.length > MAX_SCRIPT_CHARS) throw new Error(`That message is too long. Keep it under ${MAX_SCRIPT_CHARS.toLocaleString()} characters.`);
     const context = typeof row.context === "string" ? row.context.slice(0, 120000) : "";
     return { message, context, session: readSession(input) };
   })

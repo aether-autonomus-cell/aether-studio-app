@@ -82,7 +82,7 @@ test("response handling never injects redaction placeholders", () => {
   assert.doesNotMatch(api, /\[redacted\]/i);
 });
 
-test("on-device speech only selects the requested language voice", () => {
+test("on-device speech prefers requested voices and falls back by language", () => {
   const voices = [
     { name: "Microsoft David", lang: "en-US" },
     { name: "Microsoft Christopher Online (Natural)", lang: "en-US" },
@@ -90,5 +90,7 @@ test("on-device speech only selects the requested language voice", () => {
   ] as SpeechSynthesisVoice[];
   assert.equal(chooseVoice(voices, "Good evening.")?.name, "Microsoft Christopher Online (Natural)");
   assert.equal(chooseVoice(voices, "नमस्ते।")?.name, "Microsoft Madhur Online (Natural)");
-  assert.equal(chooseVoice([voices[0]!], "Good evening."), null);
+  assert.equal(chooseVoice([voices[0]!], "Good evening.")?.name, "Microsoft David");
+  assert.equal(chooseVoice([{ name: "System English", lang: "en-US" } as SpeechSynthesisVoice], "Good evening.")?.name, "System English");
+  assert.equal(chooseVoice([{ name: "System Hindi", lang: "hi-IN" } as SpeechSynthesisVoice], "नमस्ते।")?.name, "System Hindi");
 });
