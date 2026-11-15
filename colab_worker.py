@@ -100,26 +100,59 @@ def load_llm(mode):
     LLM.update(obj=(tok, model), mode="fast", name=repo)
     return LLM
 
+def pollinations_complete(system, prompt):
+    import requests
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": str(system)[:6000]})
+    messages.append({"role": "user", "content": str(prompt)[:24000]})
+    res = requests.post(
+        "https://text.pollinations.ai/openai",
+        json={"model": "openai", "messages": messages},
+        headers={"Content-Type": "application/json"},
+        timeout=45,
+    )
+    res.raise_for_status()
+    data = res.json()
+    choices = data.get("choices") or []
+    if choices and isinstance(choices[0], dict):
+        msg = choices[0].get("message") or {}
+        content = msg.get("content") or ""
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+    if isinstance(data.get("text"), str) and data["text"].strip():
+        return data["text"].strip()
+    raise RuntimeError("Pollinations returned an empty response")
+
 def complete(mode, system, prompt):
-    bundle = load_llm(mode if mode in ("gguf", "airllm", "fast") else "fast")
-    user = system + "\n\n" + prompt
-    if bundle["mode"] == "gguf":
-        out = bundle["obj"].create_chat_completion(messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}], max_tokens=4096, temperature=0.4)
-        return out["choices"][0]["message"]["content"]
-    if bundle["mode"] == "airllm":
-        model = bundle["obj"]
-        tokens = model.tokenizer([user], return_tensors="pt")
-        ids = tokens["input_ids"]
-        if torch is not None and GPU_COUNT:
-            ids = ids.cuda()
-        gen = model.generate(ids, max_new_tokens=1200)
-        return model.tokenizer.decode(gen[0], skip_special_tokens=True)
-    tok, model = bundle["obj"]
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-    text = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    batch = tok(text, return_tensors="pt").to(model.device)
-    gen = model.generate(**batch, max_new_tokens=1200, do_sample=False)
-    return tok.decode(gen[0][batch["input_ids"].shape[1]:], skip_special_tokens=True)
+    try:
+        if mode not in ("gguf", "airllm", "fast"):
+            mode = "fast"
+        # Skip heavy local model loading when no GPU is present and use Pollinations directly.
+        if GPU_COUNT < 1 and LLM["obj"] is None:
+            return pollinations_complete(system, prompt)
+        bundle = load_llm(mode)
+        user = system + "\n\n" + prompt
+        if bundle["mode"] == "gguf":
+            out = bundle["obj"].create_chat_completion(messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}], max_tokens=4096, temperature=0.4)
+            return out["choices"][0]["message"]["content"]
+        if bundle["mode"] == "airllm":
+            model = bundle["obj"]
+            tokens = model.tokenizer([user], return_tensors="pt")
+            ids = tokens["input_ids"]
+            if torch is not None and GPU_COUNT:
+                ids = ids.cuda()
+            gen = model.generate(ids, max_new_tokens=1200)
+            return model.tokenizer.decode(gen[0], skip_special_tokens=True)
+        tok, model = bundle["obj"]
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+        text = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        batch = tok(text, return_tensors="pt").to(model.device)
+        gen = model.generate(**batch, max_new_tokens=1200, do_sample=False)
+        return tok.decode(gen[0][batch["input_ids"].shape[1]:], skip_special_tokens=True)
+    except Exception as exc:
+        print("Local LLM fallback -> Pollinations:", type(exc).__name__, str(exc)[:180], flush=True)
+        return pollinations_complete(system, prompt)
 
 def fetch_image(raw, dest):
     if isinstance(raw, str) and raw.startswith("data:"):
@@ -386,11 +419,46 @@ def read_bubbles(path):
             asides.append(line)
     return " ".join(bubbles)[:400], " ".join(asides)[:400]
 
+def _extract_next_data_text(html):
+    m = re.search(r'<script[^>]*id=["\']__NEXT_DATA__["\'][^>]*>([\s\S]*?)</script>', html, re.I)
+    if not m:
+        return "", ""
+    try:
+        data = json.loads(m.group(1))
+    except Exception:
+        return "", ""
+    title = ""
+    best = ""
+    stack = [data.get("props", {}).get("pageProps", data)]
+    content_keys = {"body", "content", "text", "html", "paragraphs", "chaptercontent", "chapter_content"}
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, list):
+            stack.extend(cur)
+            continue
+        if not isinstance(cur, dict):
+            continue
+        if not title:
+            for tk in ("chapter_title", "chapterTitle", "title"):
+                if isinstance(cur.get(tk), str) and cur[tk].strip():
+                    title = clean_scraper_text(cur[tk]).strip()[:180]
+                    break
+        for k, v in cur.items():
+            if k.lower() in content_keys:
+                parts = [p for p in v if isinstance(p, str)] if isinstance(v, list) else ([v] if isinstance(v, str) else [])
+                joined = clean_scraper_text("\n".join(re.sub(r"<[^>]+>", " ", p) if "<" in p else p for p in parts)).strip()
+                if len(joined) > len(best):
+                    best = joined
+            if isinstance(v, (dict, list)):
+                stack.append(v)
+    return title, best
+
 def extract_html(html, page):
     import urllib.parse
     title_m = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
     title = re.sub("<[^>]+>", " ", title_m.group(1) if title_m else "")
     title = clean_scraper_text(re.sub(r"\s+", " ", title)).strip()[:180]
+    nd_title, nd_text = _extract_next_data_text(html)
     body = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.I)
     body = re.sub(r"<style[\s\S]*?</style>", " ", body, flags=re.I)
     panels = []
@@ -400,7 +468,7 @@ def extract_html(html, page):
         if not src_m:
             continue
         src = src_m.group(1).strip()
-        if src.startswith("data:") or re.search(r"logo|icon|sprite|avatar|banner|ads?", src, re.I):
+        if src.startswith("data:") or re.search(r"logo|icon|sprite|avatar|banner|ads?|adform|prebid", src, re.I):
             continue
         src = urllib.parse.urljoin(page, src)
         alt_m = re.search(r"alt=[\"']([^\"']*)[\"']", tag, re.I)
@@ -410,17 +478,21 @@ def extract_html(html, page):
         panels.append({"src": src, "bubble": alt[:180], "aside": after, "text": (alt + " " + after).strip()[:500]})
         if len(panels) >= 80:
             break
+    if len(nd_text) >= 80:
+        return nd_title or title, nd_text[:30000], panels
     text = clean_scraper_text(re.sub("<[^>]+>", "\n", body))
     lines = []
     for line in text.splitlines():
         clean = re.sub(r"\s+", " ", line).strip()
-        if not clean or re.search(r"next chapter|previous chapter|wtr-lab|sign in|cookie|set-cookie|ad[ -]?block|enable javascript and cookies", clean, re.I):
+        if not clean or re.search(r"next chapter|previous chapter|wtr-lab|sign in|cookie|set-cookie|adform|prebid|ad[ -]?block|enable javascript and cookies", clean, re.I):
             continue
         lines.append(clean)
-    return title, "\n".join(lines)[:20000], panels
+    return title, "\n".join(lines)[:30000], panels
 
 def clean_scraper_text(text):
     text = re.sub(r"(?im)^[ \t]*(?:set-cookie|cookie)\s*:[^\n]*", "", text)
+    text = re.sub(r"https?://[^\s]*(?:adform|prebid)[^\s]*", " ", text, flags=re.I)
+    text = re.sub(r"\b(?:adform(?:\.net)?|prebid(?:\.js)?)\b[^\n]*", " ", text, flags=re.I)
     text = re.sub(r"This is a cached snapshot[\s\S]*?\bprobe\b", " ", text, flags=re.I)
     text = re.sub(r"Ad Blocker Detected[\s\S]*?\bcontent[.!]?", " ", text, flags=re.I)
     text = re.sub(r"(?:please\s+)?(?:disable|turn off)\s+(?:your\s+)?ad[\s-]?block(?:er)?[^.!?\n]*[.!?]?", " ", text, flags=re.I)
@@ -461,7 +533,84 @@ def save_image(raw, dest, size=(1920, 1080)):
     paint_prompt(raw if isinstance(raw, str) else "", dest, size)
     return dest
 
+def _draw_cinematic_card(dest, size, index, total, title, caption, template="chapter-opener", accent="#e11d48"):
+    from PIL import Image, ImageDraw, ImageFont
+    W, H = size
+    bg_map = {
+        "chapter-opener": ((14, 15, 22), (28, 30, 44)),
+        "kinetic-title": ((10, 10, 14), (34, 16, 28)),
+        "timeline-card": ((12, 18, 24), (20, 34, 44)),
+        "data-callout": ((16, 14, 24), (26, 26, 46)),
+    }
+    top_rgb, bot_rgb = bg_map.get(template, bg_map["chapter-opener"])
+    img = Image.new("RGB", (W, H), top_rgb)
+    draw = ImageDraw.Draw(img)
+    for y in range(0, H, 8):
+        ratio = y / max(H, 1)
+        r = int(top_rgb[0] + (bot_rgb[0] - top_rgb[0]) * ratio)
+        g = int(top_rgb[1] + (bot_rgb[1] - top_rgb[1]) * ratio)
+        b = int(top_rgb[2] + (bot_rgb[2] - top_rgb[2]) * ratio)
+        draw.rectangle([0, y, W, min(y + 8, H)], fill=(r, g, b))
+    pad = max(48, W // 16)
+    draw.rectangle([pad, pad, W - pad, H - pad], outline=(240, 228, 212), width=3)
+    draw.rectangle([pad, pad, pad + 18, H - pad], fill=(225, 29, 72))
+    font_lg = ImageFont.load_default()
+    try:
+        for fp in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"):
+            if Path(fp).exists():
+                font_lg = ImageFont.truetype(fp, max(34, W // 22))
+                break
+    except Exception:
+        pass
+    font_sm = font_lg
+    try:
+        for fp in ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"):
+            if Path(fp).exists():
+                font_sm = ImageFont.truetype(fp, max(28, W // 28))
+                break
+    except Exception:
+        pass
+    header = f"[{template.upper()}]  BEAT {index}/{total}"
+    draw.text((pad + 42, pad + 36), header, fill=(244, 180, 90), font=font_sm)
+    draw.text((pad + 42, pad + 92), (title or "Aether Studio")[:48], fill=(248, 244, 236), font=font_lg)
+    words = (caption or " ").split()
+    lines = []
+    cur = []
+    for w in words:
+        cur.append(w)
+        if len(" ".join(cur)) >= (26 if W < H else 46):
+            lines.append(" ".join(cur))
+            cur = []
+    if cur:
+        lines.append(" ".join(cur))
+    y_cursor = H // 3
+    for line in lines[:12]:
+        draw.text((pad + 42, y_cursor), line, fill=(236, 232, 224), font=font_sm)
+        y_cursor += max(44, W // 20)
+    img.save(dest)
+    return dest
+
+def run_moneyprinter_turbo(job_id, packet):
+    """Modular MoneyPrinterTurbo pipeline: script-to-visual assembly, Edge-TTS, BGM ducking, subtitle burn."""
+    packet = dict(packet)
+    packet["engine"] = "moneyprinter-turbo"
+    return _assemble_timeline_video(job_id, packet, mode="moneyprinter-turbo")
+
+def run_cinematic_skill(job_id, packet):
+    """Code-driven programmatic documentation/explainer pipeline via deterministic motion templates."""
+    packet = dict(packet)
+    packet["engine"] = "cinematic-skill"
+    return _assemble_timeline_video(job_id, packet, mode="cinematic-skill")
+
 def render_job(job_id, packet):
+    engine = str(packet.get("engine") or "manhua").strip().lower()
+    if engine == "moneyprinter-turbo":
+        return run_moneyprinter_turbo(job_id, packet)
+    if engine == "cinematic-skill":
+        return run_cinematic_skill(job_id, packet)
+    return _assemble_timeline_video(job_id, packet, mode="manhua")
+
+def _assemble_timeline_video(job_id, packet, mode="manhua"):
     row = JOBS[job_id]
     try:
         aspect = packet.get("aspect") or "9:16"
@@ -469,6 +618,7 @@ def render_job(job_id, packet):
         W, H = (1080, 1920) if vertical else (1920, 1080)
         revoice = packet.get("pass") == "revoice"
         voice_id = "hi-IN-MadhurNeural" if packet.get("language") == "hi" else "en-US-ChristopherNeural"
+        cinematic_template = str(packet.get("cinematic_template") or "chapter-opener")
         chapters = packet.get("chapters") or []
         scenes = []
         for chapter in chapters:
@@ -476,7 +626,7 @@ def render_job(job_id, packet):
                 scenes.append(scene)
         if not scenes:
             raise RuntimeError("Job packet has no scenes.")
-        row.update(progress=8, label="Re-voicing" if revoice else "Voice")
+        row.update(progress=8, label=("Re-voicing" if revoice else f"{mode}: Voice"))
         repo = packet.get("image_repo") or ""
         if isinstance(repo, str) and repo.strip() and not revoice:
             os.environ["AETHER_IMAGE_REPO"] = repo.strip()[:200]
@@ -511,12 +661,20 @@ def render_job(job_id, packet):
                 save_timing(timing)
             audio_parts.append(trimmed)
             img = OUT / f"{job_id}-p{index}.png"
-            ensure_panel(scene, img, (W, H), revoice)
+            if mode == "cinematic-skill":
+                _draw_cinematic_card(img, (W, H), index, len(scenes), packet.get("title") or "Aether Explainer", spoken, cinematic_template)
+            elif mode == "moneyprinter-turbo":
+                try:
+                    ensure_panel(scene, img, (W, H), revoice)
+                except Exception:
+                    _draw_cinematic_card(img, (W, H), index, len(scenes), packet.get("title") or "MoneyPrinterTurbo", spoken, "kinetic-title")
+            else:
+                ensure_panel(scene, img, (W, H), revoice)
             clip = panel_clip(sid, img, hold, (W, H), scene.get("sfx") or "", revoice)
             clips.append(clip)
             cues.append((cursor, cursor + hold, spoken))
             cursor += hold
-            row.update(progress=10 + int(70 * index / len(scenes)), label=("Re-voicing" if revoice else f"Panel {index}"), timing=timing, voices=voices)
+            row.update(progress=10 + int(70 * index / len(scenes)), label=("Re-voicing" if revoice else f"{mode}: Beat {index}/{len(scenes)}"), timing=timing, voices=voices)
         alist = OUT / f"{job_id}-alist.txt"
         alist.write_text("".join(f"file '{part.resolve()}'\n" for part in audio_parts))
         voice = OUT / f"{job_id}-voice.mp3"
@@ -668,9 +826,9 @@ async def llm(request: Request):
     try:
         text = complete(mode, payload.get("system") or "", payload.get("prompt") or "")
     except Exception as exc:
-        print("Local model unavailable", type(exc).__name__, str(exc)[:180], flush=True)
-        raise HTTPException(503, "Local model unavailable; retry or use a configured cloud provider.") from exc
-    return {"text": text, "model": LLM.get("name"), "mode": mode}
+        print("LLM + Pollinations fallback failed", type(exc).__name__, str(exc)[:180], flush=True)
+        raise HTTPException(503, "Model and Pollinations fallback unavailable; retry in a moment.") from exc
+    return {"text": text, "model": LLM.get("name") or "pollinations/openai", "mode": mode}
 
 @app.post("/api/v1/direct")
 async def direct(request: Request):
@@ -678,6 +836,7 @@ async def direct(request: Request):
 
 @app.post("/render")
 @app.post("/api/v1/jobs")
+@app.post("/api/v1/video/produce")
 async def create_job(request: Request):
     if not allowed(request.headers):
         raise HTTPException(401, "token")
@@ -685,6 +844,17 @@ async def create_job(request: Request):
     job_id = uuid.uuid4().hex[:12]
     JOBS[job_id] = {"id": job_id, "status": "running", "progress": 5, "label": "Queued", "error": "", "mp4": None, "preview": None}
     threading.Thread(target=render_job, args=(job_id, packet), daemon=True).start()
+    return {"id": job_id, "status": "queued"}
+
+@app.post("/api/v1/cinematic")
+async def create_cinematic(request: Request):
+    if not allowed(request.headers):
+        raise HTTPException(401, "token")
+    packet = await request.json()
+    packet["engine"] = "cinematic-skill"
+    job_id = uuid.uuid4().hex[:12]
+    JOBS[job_id] = {"id": job_id, "status": "running", "progress": 5, "label": "Cinematic Skill queued", "error": "", "mp4": None, "preview": None}
+    threading.Thread(target=run_cinematic_skill, args=(job_id, packet), daemon=True).start()
     return {"id": job_id, "status": "queued"}
 
 @app.get("/api/v1/jobs/{job_id}")
@@ -797,12 +967,42 @@ def voice_file(name: str, request: Request):
         raise HTTPException(404, "voice not saved")
     return FileResponse(path, media_type="audio/mpeg")
 
+@app.post("/scrape")
+@app.post("/api/v2/scrape")
+async def scrape_single(request: Request):
+    if not allowed(request.headers):
+        raise HTTPException(401, "token")
+    import requests
+    payload = await request.json()
+    url = str(payload.get("url") or "").strip()
+    if not url.startswith("http"):
+        raise HTTPException(400, "invalid url")
+    headers = {"User-Agent": "Mozilla/5.0"}
+    if payload.get("cookie"):
+        headers["Cookie"] = str(payload.get("cookie"))[:4000]
+    res = requests.get(url, headers=headers, timeout=30)
+    res.raise_for_status()
+    title, text, panels = extract_html(res.text, url)
+    return {"ok": True, "url": url, "title": title, "text": text, "panels": panels}
+
 @app.post("/extract")
 @app.post("/api/v1/fetch")
 async def start_fetch(request: Request):
     if not allowed(request.headers):
         raise HTTPException(401, "token")
     payload = await request.json()
+    if isinstance(payload.get("url"), str) and not payload.get("urls"):
+        import requests
+        url = payload["url"].strip()
+        if not url.startswith("http"):
+            raise HTTPException(400, "invalid url")
+        headers = {"User-Agent": "Mozilla/5.0"}
+        if payload.get("cookie"):
+            headers["Cookie"] = str(payload.get("cookie"))[:4000]
+        res = requests.get(url, headers=headers, timeout=30)
+        res.raise_for_status()
+        title, text, panels = extract_html(res.text, url)
+        return {"ok": True, "url": url, "title": title, "text": text, "panels": panels}
     urls = []
     for item in payload.get("urls") or []:
         if isinstance(item, str) and item.startswith("http") and len(urls) < 220:

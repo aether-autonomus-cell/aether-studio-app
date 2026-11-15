@@ -1,6 +1,7 @@
 import { sanitizeNovelText } from "./extract.ts";
 import { locationMatches } from "./bible.ts";
 import { DEFAULT_NEGATIVE, detectLanguage, jobPacketV2Schema, voiceFor, type JobPacketV2, type PacketChapter, type PacketScene } from "./schema.ts";
+import { isCinematicTemplate, isVideoEngine, type CinematicTemplateId, type VideoEngineId } from "./video-engines.ts";
 
 export type OutfitChange = { chapter: number; outfit: string };
 
@@ -125,6 +126,8 @@ export type Project = {
   /** Hugging Face checkpoint the worker should load. Empty uses the cell default. */
   imageRepo?: string;
   imageModel?: ImageModel;
+  videoEngine?: VideoEngineId;
+  cinematicTemplate?: CinematicTemplateId;
   locations?: LocationReference[];
 };
 
@@ -653,6 +656,8 @@ export function jobPacket(project: Project, pass: "assemble" | "revoice" = "asse
     local_model: project.localModel === "airllm" || project.localModel === "fast" ? project.localModel : "gguf",
     hook: project.hook ?? "",
     pass,
+    engine: isVideoEngine(project.videoEngine) ? project.videoEngine : "manhua",
+    ...(isCinematicTemplate(project.cinematicTemplate) ? { cinematic_template: project.cinematicTemplate } : {}),
     chapters,
     seo: {
       title: project.seo.title,
