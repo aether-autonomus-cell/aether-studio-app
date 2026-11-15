@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { FACTORY_CELL } from "./factory-cell.ts";
+import { COLAB_WORKER_RAW_URLS, FACTORY_CELL } from "./factory-cell.ts";
 import { chooseVoice } from "./export.ts";
 
 const app = readFileSync(new URL("../../components/studio/app.tsx", import.meta.url), "utf8");
@@ -26,24 +26,31 @@ test("settings and youtube buttons call live network functions", () => {
   assert.match(app, /https:\/\/accounts\.google\.com\/gsi\/client/);
   assert.match(app, /youtube\.upload/);
   assert.match(api, /export async function callActiveAI/);
-  assert.match(api, /\/api\/v1\/llm/);
   assert.match(api, /API Verified & Connected — OK/);
   assert.match(api, /\/api\/v1\/preview\.mp4/);
   assert.match(api, /\/api\/v1\/youtube-upload/);
 });
 
-test("factory cell exposes the gpu worker the app calls", () => {
+test("factory cell is a compact GitHub bootstrapper and colab_worker.py exposes full GPU worker endpoints", () => {
+  const lines = FACTORY_CELL.trim().split("\n");
+  assert.ok(lines.length <= 25, `Expected compact bootstrapper, got ${lines.length} lines`);
+  assert.match(FACTORY_CELL, /colab_worker\.py/);
+  assert.ok(COLAB_WORKER_RAW_URLS.length >= 1);
+
   for (const path of [
     "/api/v1/health",
     "/api/v1/llm",
     "/api/v1/jobs",
     "/api/v1/preview.mp4",
     "/api/v1/youtube-upload",
+    "/api/v1/cinematic",
+    "/api/v1/video/produce",
+    "/scrape",
     "/api/generate",
     "/extract",
     "/tts",
     "/render",
-    "@app.get(\"/health\")",
+    '@app.get("/health")',
     "/api/v1/speak",
     "edge_tts",
     "hi-IN-MadhurNeural",
@@ -55,19 +62,18 @@ test("factory cell exposes the gpu worker the app calls", () => {
     "silenceremove",
     "apad=pad_dur=0.12",
     "/api/v1/masters/",
+    "text.pollinations.ai/openai",
+    "run_moneyprinter_turbo",
+    "run_cinematic_skill",
   ]) {
-    assert.equal(FACTORY_CELL.includes(path), true, path);
-  }
-  assert.equal(FACTORY_CELL.includes("tensor_split=None"), false);
-  assert.equal(FACTORY_CELL.includes("Generating images"), false);
-  assert.doesNotMatch(FACTORY_CELL, /pollinations/i);
-  assert.match(FACTORY_CELL, /GPU painter unavailable/);
-  for (const path of ["/api/v1/health", "/api/v1/llm", "/api/v1/paint", "/api/v1/speak", "/api/v1/jobs", "/api/v1/fetch", "/api/v1/youtube-upload"]) {
     assert.equal(worker.includes(path), true, path);
   }
+  assert.equal(worker.includes("tensor_split=None"), false);
+  assert.equal(worker.includes("Generating images"), false);
+  assert.match(worker, /GPU painter unavailable/);
 });
 
-test("image generation has selectable providers and no Pollinations URL fallback", () => {
+test("image generation has selectable providers and no Pollinations image URL fallback", () => {
   assert.match(app, /Generate 5x Batch/);
   assert.match(app, /Auto-Fix Failed Panels/);
   assert.match(app, /uploadYoutubeBlob/);

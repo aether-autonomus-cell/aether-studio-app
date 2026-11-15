@@ -14,6 +14,16 @@ export const VOICE_BY_LANGUAGE = {
 export const languageSchema = z.enum(["hi", "en"]);
 export type Language = z.infer<typeof languageSchema>;
 
+export const videoEngineSchema = z.enum(["manhua", "moneyprinter-turbo", "cinematic-skill"]);
+export type VideoEngine = z.infer<typeof videoEngineSchema>;
+
+export const cinematicTemplateSchema = z.enum([
+  "kinetic-title",
+  "timeline-card",
+  "data-callout",
+  "chapter-opener",
+]);
+
 export const tileSchema = z.object({
   prompt: z.string().min(1),
   negative: z.string(),
@@ -73,6 +83,9 @@ export const jobPacketV2Schema = z.object({
   hook: z.string().default(""),
   /** assemble draws missing art. revoice keeps every picture and only replaces audio and captions. */
   pass: z.enum(["assemble", "revoice"]).default("assemble"),
+  /** Modular production engine dispatched to Colab/Vercel worker. */
+  engine: videoEngineSchema.default("manhua"),
+  cinematic_template: cinematicTemplateSchema.optional(),
   chapters: z.array(chapterSchema).min(1),
   seo: seoSchema,
   /** Hugging Face repo for the Colab checkpoint. Empty keeps the cell default. */

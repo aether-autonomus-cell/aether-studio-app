@@ -1,4 +1,4 @@
-const fs = require('fs');
+import fs from "node:fs";
 const filePath = 'src/lib/studio/api.ts';
 if (fs.existsSync(filePath)) {
   let content = fs.readFileSync(filePath, 'utf8');

@@ -73,6 +73,27 @@ import { chunkChapterText, expandChapterUrls, MAX_SCRIPT_CHARS } from "@/lib/stu
 import { containsHan } from "@/lib/studio/wtr";
 import { workerEndpoint } from "@/lib/studio/worker";
 import { loadProject, saveProject } from "@/lib/studio/persist";
+import {
+  appendMemoryLog,
+  loadGBrain,
+  queryContinuityContext,
+  recordSceneHistoryInGBrain,
+  saveGBrain,
+  upsertCharactersInGBrain,
+  type GBrainStore,
+} from "@/lib/studio/memory";
+import {
+  advanceHermesStep,
+  createHermesRun,
+  type HermesWorkflowState,
+} from "@/lib/studio/hermes";
+import {
+  CINEMATIC_TEMPLATES,
+  VIDEO_ENGINES,
+  type CinematicTemplateId,
+  type VideoEngineId,
+} from "@/lib/studio/video-engines";
+import { type YoutubeSkillCommand } from "@/lib/studio/youtube-skill";
 
 type Tab = "story" | "forge" | "strip" | "chat" | "bay" | "youtube";
 type Aspect = "16:9" | "9:16";
@@ -462,6 +483,10 @@ export function StudioApp() {
   const [tagDraft, setTagDraft] = useState(SAMPLE.seo.tags.join(", "));
   const seenTags = useRef(SAMPLE.seo.tags.join("|"));
   const [voiced, setVoiced] = useState<Record<string, true>>({});
+  const [videoEngine, setVideoEngine] = useState<VideoEngineId>("manhua");
+  const [cinematicTemplate, setCinematicTemplate] = useState<CinematicTemplateId>("chapter-opener");
+  const [gbrain, setGbrain] = useState<GBrainStore>(() => loadGBrain());
+  const [hermes, setHermes] = useState<HermesWorkflowState>(() => createHermesRun());
   const voiceRun = useRef(0);
   const jobPass = useRef<"assemble" | "revoice">("assemble");
   const jobLanguage = useRef<ReelLanguage>("en");
@@ -478,6 +503,8 @@ export function StudioApp() {
       if (saved.aspect === "16:9" || saved.aspect === "9:16") setAspect(saved.aspect);
       if (saved.imageRepo) setImageRepo(saved.imageRepo);
       if (saved.imageModel) setImageModel(saved.imageModel);
+      if (saved.videoEngine) setVideoEngine(saved.videoEngine);
+      if (saved.cinematicTemplate) setCinematicTemplate(saved.cinematicTemplate);
       const flags: Record<string, true> = {};
       for (const scene of saved.scenes) {
         if (hasRequestedVoice(scene.voiceEn, "en")) flags[`${scene.id}:en`] = true;
@@ -491,8 +518,20 @@ export function StudioApp() {
 
   useEffect(() => {
     if (!hydrated.current) return;
-    saveProject({ ...project, imageRepo: imageRepo.trim() || project.imageRepo, imageModel });
-  }, [project, imageRepo, imageModel]);
+    saveProject({
+      ...project,
+      imageRepo: imageRepo.trim() || project.imageRepo,
+      imageModel,
+      videoEngine,
+      cinematicTemplate,
+    });
+    setGbrain((current) => {
+      let next = upsertCharactersInGBrain(current, project.characters, 1);
+      next = recordSceneHistoryInGBrain(next, 1, project.title, project.scenes, project.hook || "");
+      saveGBrain(next);
+      return next;
+    });
+  }, [project, imageRepo, imageModel, videoEngine, cinematicTemplate]);
 
   useEffect(() => {
     return () => {
@@ -1240,16 +1279,16 @@ export function StudioApp() {
       const voices = await loadVoices(1200);
       try {
         await speakOnDevice(text, chooseVoice(voices, text));
-        setNotice("Reading on this phone.");
+        setNotice("Reading via built-in browser speech synthesis.");
       } catch {
-        setError("Voice did not start. Tap Read again.");
+        setNotice("Browser speech was paused or blocked by the device. Tap Read it again to trigger audio playback.");
       }
     } catch (err) {
       if (speech.state !== "failed") {
         setNotice("Reading on this phone.");
         return;
       }
-      setError(err instanceof Error ? err.message : "The reading stopped.");
+      setNotice(err instanceof Error ? `${err.message} (Tap Read it to retry browser speech.)` : "Speech fallback paused.");
     } finally {
       setBusy(null);
     }
@@ -1304,7 +1343,17 @@ export function StudioApp() {
     const active = source.language === "hi" || source.language === "en" ? source.language : language;
     return jobPacket(
       projectWithAbsoluteArt(
-        { ...source, language: active, voice: source.voice || EXPLAIN_VOICES[active], aspect, localModel, imageRepo: imageRepo.trim() || source.imageRepo, hook: source.hook },
+        {
+          ...source,
+          language: active,
+          voice: source.voice || EXPLAIN_VOICES[active],
+          aspect,
+          localModel,
+          imageRepo: imageRepo.trim() || source.imageRepo,
+          hook: source.hook,
+          videoEngine,
+          cinematicTemplate,
+        },
         origin,
       ),
       pass,
@@ -1580,11 +1629,23 @@ export function StudioApp() {
     if (!message) return;
     setChatDraft("");
     setChatLog((current) => [...current, { role: "user", text: message }]);
+    setHermes((current) =>
+      advanceHermesStep(current, {
+        role: "assistant",
+        phase: "execute",
+        action: "chat_turn",
+        route: duty,
+        ok: true,
+        note: message.slice(0, 80),
+      }),
+    );
     setBusy("Asking the studio AI");
     setError(null);
     try {
+      const continuity = queryContinuityContext(gbrain, message, project.characters);
       const context = JSON.stringify({
         chapterScript: draft,
+        gbrainContinuity: continuity,
         project: {
           title: project.title,
           logline: project.logline,
@@ -1639,9 +1700,38 @@ export function StudioApp() {
       const result = await chatTurn({ data: { message, context, ...session() } });
       if (!result.ok) {
         setChatLog((current) => [...current, { role: "studio", text: result.error }]);
+        setHermes((current) =>
+          advanceHermesStep(current, {
+            role: "assistant",
+            phase: "recovered",
+            action: "chat_turn",
+            route: duty,
+            ok: false,
+            note: result.error.slice(0, 80),
+          }),
+        );
         return;
       }
       setChatLog((current) => [...current, { role: "studio", text: result.reply }]);
+      setHermes((current) =>
+        advanceHermesStep(current, {
+          role: "assistant",
+          phase: "complete",
+          action: "chat_turn",
+          route: result.provider || result.via || "gateway",
+          ok: true,
+          note: `Replied via ${result.provider || result.via || "gateway"}`,
+        }),
+      );
+      setGbrain((current) => {
+        const next = appendMemoryLog(
+          current,
+          "hermes",
+          `Chat (${result.provider || result.via || "ai"}): ${message.slice(0, 80)}`,
+        );
+        saveGBrain(next);
+        return next;
+      });
       const action = result.action;
       if (!action) return;
       let confirmation = "";
@@ -1800,9 +1890,7 @@ export function StudioApp() {
         try {
           await speakOnDevice(line, null);
         } catch {
-          setError("Voice did not start. Pictures were not touched.");
-          setBusy(null);
-          return;
+          setNotice("Browser speech paused on this panel. Moving cleanly.");
         }
       }
     }
@@ -1836,7 +1924,7 @@ export function StudioApp() {
   useEffect(() => {
     if (seenTags.current === tagsKey) return;
     seenTags.current = tagsKey;
-    setTagDraft(project.seo.tags.join(", "));
+    setTagDraft(tagsKey ? tagsKey.split("|").join(", ") : "");
   }, [tagsKey]);
 
   return (
@@ -2402,7 +2490,22 @@ export function StudioApp() {
           <section className="space-y-4">
             <div>
               <h2 className="text-3xl text-paper">Chat</h2>
-              <p className="mt-2 text-sm text-muted">Same AI as the director. It can see this project. Correct a look or a line here. A language change does not redraw.</p>
+              <p className="mt-2 text-sm text-muted">Same AI as the director. It can see this project, GBrain continuity, and YouTube skills. Paste up to 30,000 characters.</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {(["/yt-script", "/yt-package", "/yt-edit"] as YoutubeSkillCommand[]).map((cmd) => (
+                <button
+                  key={cmd}
+                  type="button"
+                  onClick={() => setChatDraft((prev) => (prev.trim() ? `${cmd} ${prev}` : `${cmd} `))}
+                  className="min-h-9 rounded-full bg-panel px-3 text-xs font-semibold text-paper"
+                >
+                  {cmd}
+                </button>
+              ))}
+              <span className="ml-auto rounded-full bg-ink-2 px-3 py-1 text-xs text-muted">
+                Hermes: {hermes.phase} · step {hermes.stepCount}/{hermes.maxSteps}
+              </span>
             </div>
             <ul className="space-y-2">
               {chatLog.map((entry, index) => (
@@ -2505,11 +2608,43 @@ export function StudioApp() {
               </button>
               <p className="mt-2 text-xs text-muted">The other language keeps its own captions. Silence is trimmed on the worker after each voice, without cutting a breath inside a line.</p>
             </div>
+            <div className="rounded-2xl bg-ink-2 p-4 space-y-3">
+              <label className="block" htmlFor="video-engine">
+                <span className="text-sm font-medium text-paper">Autonomous Video Engine</span>
+                <select id="video-engine" value={videoEngine} onChange={(event) => setVideoEngine(event.target.value as VideoEngineId)} className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base">
+                  {VIDEO_ENGINES.map((eng) => (
+                    <option key={eng.id} value={eng.id}>
+                      {eng.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="mt-1 block text-xs text-muted">
+                  {VIDEO_ENGINES.find((eng) => eng.id === videoEngine)?.summary}
+                </span>
+              </label>
+              {videoEngine === "cinematic-skill" ? (
+                <label className="block" htmlFor="cinematic-template">
+                  <span className="text-sm font-medium text-paper">Cinematic Motion Template</span>
+                  <select id="cinematic-template" value={cinematicTemplate} onChange={(event) => setCinematicTemplate(event.target.value as CinematicTemplateId)} className="field mt-2 min-h-12 w-full rounded-xl px-3 text-base">
+                    {CINEMATIC_TEMPLATES.map((tpl) => (
+                      <option key={tpl.id} value={tpl.id}>
+                        {tpl.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+            </div>
             <button type="button" onClick={() => void onSendJob()} disabled={!!busy || !workerUrl.trim()} className="min-h-12 w-full rounded-2xl bg-seal text-sm font-semibold text-paper disabled:opacity-50">
               Send film to worker
             </button>
             <div className="rounded-2xl bg-ink-2 p-4">
-              <h3 className="text-lg text-paper">Render status</h3>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-lg text-paper">Agent &amp; Render Status</h3>
+                <span className="rounded-full bg-panel px-2.5 py-0.5 text-xs text-muted">
+                  Hermes · {hermes.phase} ({hermes.stepCount}/{hermes.maxSteps})
+                </span>
+              </div>
               {job ? (
                 <div className="mt-3" aria-live="polite">
                   <p className="text-sm text-paper">
@@ -2527,6 +2662,20 @@ export function StudioApp() {
               ) : (
                 <p className="mt-2 text-sm text-muted">No job yet. Connect the worker, then render.</p>
               )}
+              <div className="mt-3 border-t border-line pt-3">
+                <p className="text-xs font-semibold text-muted uppercase">
+                  GBrain Memory ({Object.keys(gbrain.characters).length} cast · {gbrain.sceneHistory.length} chapters)
+                </p>
+                {gbrain.logs.length ? (
+                  <ul className="mt-1.5 max-h-28 space-y-1 overflow-auto text-xs text-muted">
+                    {gbrain.logs.slice(0, 5).map((entry) => (
+                      <li key={entry.id}>[{entry.kind}] {entry.summary}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-1 text-xs text-muted">No memory logs recorded yet.</p>
+                )}
+              </div>
             </div>
             <button type="button" onClick={() => setShowCell((value) => !value)} className="min-h-11 text-sm font-semibold text-cinnabar">
               {showCell ? "Hide factory cell" : "Show factory cell"}

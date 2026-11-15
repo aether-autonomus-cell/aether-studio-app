@@ -2,22 +2,29 @@ import { createServerFn } from "@tanstack/react-start";
 import { studioConfig } from "@/lib/studio/config";
 import {
   cloudRequest,
-  directorSystem,
   readSession,
-  shouldFailover,
-  shouldFailoverWorker,
   textFromModel,
-  textVia,
   type AiSession,
 } from "@/lib/studio/ai-router";
-import { htmlToText, extractPanels, hasUnsafeScrapeMarker, sanitizeNovelText, cleanScrapedChapter } from "@/lib/studio/extract";
+import {
+  htmlToText,
+  extractPanels,
+  extractPlatformText,
+  fetchWithAgentReachFallback,
+  hasUnsafeScrapeMarker,
+  sanitizeNovelText,
+  cleanScrapedChapter,
+} from "@/lib/studio/extract";
 import { containsHan, fetchWtrChapter, parseWtrChapterUrl } from "@/lib/studio/wtr";
 import { assertJobId, jobResourcePath, parseJobStatus, readJobId, type JobSnapshot } from "@/lib/studio/jobs";
 import { parseStudioAction, type StudioAction } from "@/lib/studio/bible";
 import type { ImageModel } from "@/lib/studio/model";
 import { jobPacketV2Schema, VOICE_BY_LANGUAGE } from "@/lib/studio/schema";
 import { workerEndpoint } from "@/lib/studio/worker";
-import { deterministicDirection, parseDirection, type Direction } from "@/lib/studio/director";
+import { deterministicDirection, parseDirection, recoverDirection, type Direction } from "@/lib/studio/director";
+import { hermesDirectorContract } from "@/lib/studio/hermes";
+import { routeCompletion, type GatewayProviderId, type RouteAttempt } from "@/lib/studio/router";
+import { detectYoutubeCommand, youtubeSkillPrompt } from "@/lib/studio/youtube-skill";
 import { MAX_SCRIPT_CHARS } from "@/lib/studio/range";
 
 async function geminiText(
@@ -109,53 +116,25 @@ async function callCloud(
   return openaiText(call, system, user, false);
 }
 
-async function callLocal(
-  session: AiSession,
-  system: string,
-  user: string,
-): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
-  if (!session.workerUrl.trim()) return { ok: false, error: "No Colab or Kaggle worker is connected." };
-  const result = await workerPost("/api/v1/llm", session.workerUrl, session.workerToken, {
-    system,
-    prompt: user,
-    model_mode: session.localModel,
-    language: session.language,
-  });
-  if (!result.ok) return result;
-  const text = textFromModel(result.json);
-  if (!text.trim()) return { ok: false, error: "Local AI returned an empty script." };
-  return { ok: true, text };
-}
-
 export async function callActiveAI(
   session: AiSession,
   system: string,
   user: string,
-): Promise<{ ok: true; text: string; via: "cloud" | "local" } | { ok: false; error: string }> {
-  const hasKey = Boolean(session.apiKey.trim());
-  const hasWorker = Boolean(session.workerUrl.trim());
-  const via = textVia(session.duty, hasKey, hasWorker);
-  if (via === "none") {
-    return { ok: false, error: "Add a cloud API key or connect the Colab/Kaggle worker. Nothing is saved on this phone." };
-  }
-  if (via === "worker") {
-    const local = await callLocal(session, system, user);
-    if (local.ok) return { ok: true, text: local.text, via: "local" };
-    if (session.apiKey.trim() && shouldFailoverWorker(local.error)) {
-      const cloud = await callCloud(session, system, user, true);
-      if (cloud.ok) return { ok: true, text: cloud.text, via: "cloud" };
-      return { ok: false, error: cloud.error };
-    }
-    return { ok: false, error: local.error };
-  }
-  const cloud = await callCloud(session, system, user, true);
-  if (cloud.ok) return { ok: true, text: cloud.text, via: "cloud" };
-  if (session.duty !== "key" && hasWorker && shouldFailover(cloud.status, cloud.error)) {
-    const local = await callLocal(session, system, user);
-    if (local.ok) return { ok: true, text: local.text, via: "local" };
-    return { ok: false, error: local.error || cloud.error };
-  }
-  return { ok: false, error: cloud.error };
+  jsonMode = true,
+): Promise<
+  | { ok: true; text: string; via: "cloud" | "local" | "pollinations"; provider: GatewayProviderId; trace: RouteAttempt[] }
+  | { ok: false; error: string; trace?: RouteAttempt[] }
+> {
+  return routeCompletion(session, system, user, {
+    jsonMode,
+    workerInvoke: async (path, activeSession, payload) => {
+      const res = await workerPost(path, activeSession.workerUrl, activeSession.workerToken, payload);
+      if (res.ok) return res;
+      const statusMatch = res.error.match(/Worker returned (\d{3})/);
+      const status = statusMatch ? Number(statusMatch[1]) : 0;
+      return { ok: false, error: res.error, status };
+    },
+  });
 }
 
 async function workerPost(
@@ -237,31 +216,47 @@ export const directChapter = createServerFn({ method: "POST" })
     const row = input as { text?: unknown; lock?: unknown };
     const text = typeof row?.text === "string" ? row.text.trim() : "";
     if (text.length < 40) throw new Error("Paste at least a short chapter.");
-    if (text.length > 9000) throw new Error("That chunk is too long. The studio splits a long chapter before asking.");
+    const bounded = text.slice(0, MAX_SCRIPT_CHARS);
     const lock = typeof row.lock === "string" ? row.lock.trim().slice(0, 1800) : "";
-    return { text, lock, session: readSession(input) };
+    return { text: bounded, lock, session: readSession(input) };
   })
-  .handler(async ({ data }): Promise<{ ok: true; direction: Direction; via: "cloud" | "local"; recovered?: boolean } | { ok: false; error: string }> => {
-    const system = directorSystem(data.session.language);
+  .handler(async ({ data }): Promise<
+    | { ok: true; direction: Direction; via: "cloud" | "local" | "pollinations"; provider?: GatewayProviderId; recovered?: boolean }
+    | { ok: false; error: string }
+  > => {
+    const system = hermesDirectorContract(data.session.language, data.lock);
     const lock = data.lock ? `CHARACTER LOCK. Use these looks in every imagePrompt. Do not narrate this lock as extra scenes.\n${data.lock}\n\n` : "";
-    const user = containsHan(data.text)
-      ? `${lock}Source chapter (translate every Chinese character; do not copy Chinese into the JSON):\n${data.text}`
-      : `${lock}${data.text}`;
-    const result = await callActiveAI(data.session, system, user);
-    if (!result.ok) return result;
-    let via: "cloud" | "local" = result.via;
+    const chunk = data.text.slice(0, 9000);
+    const user = containsHan(chunk)
+      ? `${lock}Source chapter (translate every Chinese character; do not copy Chinese into the JSON):\n${chunk}`
+      : `${lock}${chunk}`;
+    const result = await callActiveAI(data.session, system, user, true);
+    if (!result.ok) {
+      return {
+        ok: true,
+        direction: deterministicDirection(data.text),
+        via: "local",
+        provider: "worker",
+        recovered: true,
+      };
+    }
+    let via: "cloud" | "local" | "pollinations" = result.via;
+    let provider: GatewayProviderId = result.provider;
     let direction = parseDirection(result.text);
     let recovered = false;
     if (!direction) {
       const repair = await callActiveAI(
         data.session,
         `${system} Return a strict JSON object with title, hook, logline, timeline, characters, scenes, narration, seo. Repair this response without inventing source events.`,
-        `Source chapter:\n${data.text}\n\nMalformed plan to repair:\n${result.text.slice(0, 6000)}`,
+        `Source chapter:\n${chunk}\n\nMalformed plan to repair:\n${result.text.slice(0, 6000)}`,
+        true,
       );
       if (repair.ok) {
-        direction = parseDirection(repair.text);
-        if (direction) {
+        const repaired = parseDirection(repair.text);
+        if (repaired) {
+          direction = repaired;
           via = repair.via;
+          provider = repair.provider;
           recovered = true;
         }
       }
@@ -271,12 +266,14 @@ export const directChapter = createServerFn({ method: "POST" })
         data.session,
         system,
         `The previous JSON still contained Chinese. Translate it fully into ${data.session.language === "hi" ? "Hindi" : "English"} and return JSON only.\n${result.text.slice(0, 6000)}`,
+        true,
       );
       if (retry.ok) {
         const again = parseDirection(retry.text);
         if (again) {
           direction = again;
           via = retry.via;
+          provider = retry.provider;
           recovered = true;
         }
       }
@@ -285,7 +282,8 @@ export const directChapter = createServerFn({ method: "POST" })
       !direction ||
       containsHan(`${direction.narration}\n${direction.hook}\n${direction.scenes.map((scene) => `${scene.caption} ${scene.dialogue}`).join("\n")}`)
     ) {
-      direction = deterministicDirection(data.text);
+      const fallback = recoverDirection(result.text, data.text);
+      direction = fallback.direction;
       recovered = true;
     }
     if (!direction.narration) {
@@ -295,7 +293,7 @@ export const directChapter = createServerFn({ method: "POST" })
         .replace(/\s+/g, " ")
         .trim();
     }
-    return { ok: true, direction, via, ...(recovered ? { recovered: true } : {}) };
+    return { ok: true, direction, via, provider, ...(recovered ? { recovered: true } : {}) };
   });
 
 export const writeBeatPrompt = createServerFn({ method: "POST" })
@@ -512,7 +510,10 @@ export const speakLine = createServerFn({ method: "POST" })
     const sceneId = typeof row.sceneId === "string" ? row.sceneId.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 80) : "";
     return { text: text.slice(0, 12000), sceneId, force: row.force === true, session: readSession(input) };
   })
-  .handler(async ({ data }): Promise<{ ok: true; audioBase64: string; mimeType: string; audioUrl?: string } | { ok: false; error: string }> => {
+  .handler(async ({ data }): Promise<
+    | { ok: true; audioBase64: string; mimeType: string; audioUrl?: string; voice?: string }
+    | { ok: false; error: string; useBrowserSpeech?: boolean; voice?: string }
+  > => {
     const language = data.session.language;
     const voice = VOICE_BY_LANGUAGE[language];
     if (data.session.workerUrl.trim() && data.session.duty !== "key") {
@@ -528,12 +529,19 @@ export const speakLine = createServerFn({ method: "POST" })
         const audio = typeof row.audioBase64 === "string" ? row.audioBase64 : "";
         const audioUrl = typeof row.url === "string" && row.url.startsWith("/api/v1/voices/") ? row.url.slice(0, 180) : "";
         const mimeType = typeof row.mimeType === "string" && row.mimeType ? row.mimeType : "audio/mpeg";
-        if (audio.length >= 100 || audioUrl) return { ok: true, audioBase64: audio, mimeType, ...(audioUrl ? { audioUrl } : {}) };
+        if (audio.length >= 100 || audioUrl) {
+          return { ok: true, audioBase64: audio, mimeType, voice, ...(audioUrl ? { audioUrl } : {}) };
+        }
       }
     }
     const edge = await edgeSpeak(data.text, voice);
-    if (edge.ok) return edge;
-    return { ok: false, error: "Microsoft voice did not answer, and the worker has no saved track yet. Connect the worker so a local male voice can speak." };
+    if (edge.ok) return { ...edge, voice };
+    return {
+      ok: false,
+      error: "Using built-in browser speech synthesis while Edge-TTS / worker voice is unavailable.",
+      useBrowserSpeech: true,
+      voice,
+    };
   });
 
 function escapeSsml(value: string): string {
@@ -771,48 +779,6 @@ async function readHtml(
   return last;
 }
 
-async function readViaReader(pageUrl: string): Promise<{ title: string; text: string } | null> {
-  if (hasUnsafeScrapeMarker(pageUrl)) return null;
-  const source = new URL(pageUrl);
-  if (source.hostname.toLowerCase().replace(/^www\./, "") === "wtr-lab.com") return null;
-  let endpoint: URL;
-  try {
-    endpoint = new URL(`https://r.jina.ai/${pageUrl}`);
-  } catch {
-    return null;
-  }
-  const blocked = await assertPublic(endpoint.hostname);
-  if (blocked) return null;
-  let res: Response;
-  try {
-    res = await fetch(endpoint, {
-      redirect: "follow",
-      signal: AbortSignal.timeout(20000),
-      headers: {
-        Accept: "text/plain, text/markdown, */*",
-        "User-Agent": PAGE_HEADERS["User-Agent"],
-        "X-Return-Format": "markdown",
-      },
-    });
-  } catch {
-    return null;
-  }
-  if (!res.ok || hasUnsafeScrapeMarker(res.url || endpoint.toString())) return null;
-  const raw = (await res.text()).slice(0, 500_000);
-  if (hasUnsafeScrapeMarker(raw)) return null;
-  const titleLine = raw.match(/^Title:\s*(.+)$/m);
-  const body = raw.replace(/^Title:\s*.+$/m, "").replace(/^URL Source:\s*.+$/m, "").replace(/^Markdown Content:\s*/m, "");
-  const extracted = htmlToText(`<title>${titleLine?.[1] ?? ""}</title><article><p>${body}</p></article>`);
-  const text = extracted.text;
-  if (
-    text.length < 80 ||
-    hasUnsafeScrapeMarker(`${extracted.title}\n${text}`) ||
-    looksLikeChallenge(raw) ||
-    looksLikePaywall(text)
-  ) return null;
-  return { title: extracted.title || titleLine?.[1]?.trim() || "", text };
-}
-
 function safeCookie(value: unknown): string {
   if (typeof value !== "string") return "";
   const clean = value.replace(/[\r\n]/g, "").trim();
@@ -848,13 +814,14 @@ export const fetchSource = createServerFn({ method: "POST" })
     if (blocked) return { ok: false, code: "SSRF_BLOCKED", error: blocked };
 
     const wtr = parseWtrChapterUrl(data.url);
+    const scrapeWithWorker = data.workerUrl
+      ? async (path: "/api/v1/fetch" | "/scrape" | "/api/v2/scrape", url: string) => {
+          const result = await workerPost(path, data.workerUrl, data.workerToken, { url });
+          return result.ok ? result.json : null;
+        }
+      : undefined;
+
     if (wtr) {
-      const scrapeWithWorker = data.workerUrl
-        ? async (path: "/api/v2/scrape" | "/scrape", url: string) => {
-            const result = await workerPost(path, data.workerUrl, data.workerToken, { url });
-            return result.ok ? result.json : null;
-          }
-        : undefined;
       const chapter = await fetchWtrChapter(wtr, scrapeWithWorker);
       if (chapter && chapter.text.length >= 80) {
         const text = sanitizeNovelText(chapter.text);
@@ -866,15 +833,29 @@ export const fetchSource = createServerFn({ method: "POST" })
       return {
         ok: false,
         code: "FETCH_BLOCKED",
-        error: "WTR-LAB blocked the chapter fetch. The CORS proxies could not read it; connect a worker or paste the chapter text.",
+        error: "WTR-LAB blocked the chapter fetch across Worker, Codetabs, AllOrigins, and Jina Reader. Paste the chapter text instead.",
       };
+    }
+
+    // Try Agent-Reach ordered fallback chain (Worker -> Codetabs -> AllOrigins -> Jina Reader) first when worker is connected,
+    // or direct HTML read when a custom cookie is supplied.
+    if (!data.cookie && scrapeWithWorker) {
+      const reached = await fetchWithAgentReachFallback(data.url, { workerScrape: scrapeWithWorker });
+      if (reached && (reached.text.length >= 80 || reached.panels.length > 0)) {
+        return {
+          ok: true,
+          title: reached.title || page.hostname,
+          text: reached.text,
+          panels: reached.panels,
+        };
+      }
     }
 
     const direct = await readHtml(page, data.cookie);
     if (direct.ok) {
       const challenge = looksLikeChallenge(direct.html);
-      const extracted = htmlToText(direct.html);
-      const panels = extractPanels(direct.html, direct.finalUrl.toString());
+      const extracted = extractPlatformText(direct.html, direct.finalUrl.toString());
+      const panels = extracted.panels.length ? extracted.panels : extractPanels(direct.html, direct.finalUrl.toString());
       if (
         !challenge &&
         !hasUnsafeScrapeMarker(`${direct.finalUrl}\n${extracted.title}\n${extracted.text}`) &&
@@ -892,9 +873,16 @@ export const fetchSource = createServerFn({ method: "POST" })
       return direct;
     }
 
-    const fallback = data.cookie || wtr ? null : await readViaReader(data.url);
-    if (fallback) {
-      return { ok: true, title: fallback.title || page.hostname, text: fallback.text, panels: [] };
+    const fallback = data.cookie
+      ? null
+      : await fetchWithAgentReachFallback(data.url, { workerScrape: scrapeWithWorker });
+    if (fallback && (fallback.text.length >= 80 || fallback.panels.length > 0)) {
+      return {
+        ok: true,
+        title: fallback.title || page.hostname,
+        text: fallback.text,
+        panels: fallback.panels,
+      };
     }
 
     if (direct.ok && looksLikeChallenge(direct.html)) {
@@ -1280,13 +1268,15 @@ export const chatTurn = createServerFn({ method: "POST" })
     const row = input as { message?: unknown; context?: unknown };
     const message = typeof row.message === "string" ? row.message.trim() : "";
     if (message.length < 1) throw new Error("Type a message.");
-    if (message.length > MAX_SCRIPT_CHARS) throw new Error(`That message is too long. Keep it under ${MAX_SCRIPT_CHARS.toLocaleString()} characters.`);
+    const boundedMessage = message.slice(0, Math.max(MAX_SCRIPT_CHARS, 60_000));
     const context = typeof row.context === "string" ? row.context.slice(0, 120000) : "";
-    return { message, context, session: readSession(input) };
+    return { message: boundedMessage, context, session: readSession(input) };
   })
-  .handler(async ({ data }): Promise<{ ok: true; reply: string; action: StudioAction | null } | { ok: false; error: string }> => {
+  .handler(async ({ data }): Promise<{ ok: true; reply: string; action: StudioAction | null; via?: string; provider?: GatewayProviderId } | { ok: false; error: string }> => {
+    const ytCmd = detectYoutubeCommand(data.message);
+    const ytDirective = ytCmd ? `\n${youtubeSkillPrompt(ytCmd.command, data.session.language)}` : "";
     const system = [
-      "You are the Universal Studio Agent inside Aether Studio. You can inspect the complete live state included in the Project context and perform allowed app actions.",
+      "You are the Universal Studio Agent inside Aether Studio (Hermes loop-free creative execution + GBrain continuity). You can inspect the complete live state included in the Project context and perform allowed app actions.",
       "Answer in the same language the user wrote.",
       "If they ask to change English/Hindi voiceover, tell them Re-voice only changes the spoken script, audio, captions, and YouTube text. It does not redraw pictures.",
       "Never claim an action happened unless you emit its command. Emit at most one command as the final line, exactly ACTION followed by one JSON object. If a request needs multiple actions, choose the most important one and explain.",
@@ -1294,11 +1284,31 @@ export const chatTurn = createServerFn({ method: "POST" })
       "Use exact scene ids and character names from Project context. For language commands set only hi or en. Do not invent ids.",
       "For look changes or simple line changes you may also use legacy commands {\"type\":\"look\",\"name\":\"Exact Name\",\"face\":\"optional\",\"hair\":\"optional\",\"age\":\"optional\",\"scars\":\"optional\",\"eyes\":\"optional\",\"body\":\"optional\",\"outfit\":\"optional\",\"chapter\":0} and {\"type\":\"line\",\"id\":\"s1\",\"text\":\"new line\"}.",
       "Do not claim you generated an image unless the user already said a panel was painted. If the user is only asking a question, do not add an ACTION line.",
-    ].join(" ");
-    const result = await callActiveAI(data.session, system, data.context ? `Project:\n${data.context}\n\nUser:\n${data.message}` : data.message);
-    if (!result.ok) return result;
-    const parsed = parseStudioAction(result.text.trim().slice(0, 4000));
-    return { ok: true, reply: parsed.reply || result.text.trim().slice(0, 4000), action: parsed.action };
+      ytDirective,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const result = await callActiveAI(
+      data.session,
+      system,
+      data.context ? `Project:\n${data.context}\n\nUser:\n${data.message}` : data.message,
+      false,
+    );
+    if (!result.ok) {
+      return {
+        ok: true,
+        reply: "All cloud and worker text providers were unreachable. Paste the chapter into Source or use 'Split script into scenes' to run local deterministic beat splitting.",
+        action: data.message.length > 350 ? { type: "split_script_into_scenes" } : null,
+      };
+    }
+    const parsed = parseStudioAction(result.text.trim().slice(0, 6000));
+    return {
+      ok: true,
+      reply: parsed.reply || result.text.trim().slice(0, 6000),
+      action: parsed.action,
+      via: result.via,
+      provider: result.provider,
+    };
   });
 
 async function imageBytes(url: string): Promise<{ mime: string; data: string } | null> {

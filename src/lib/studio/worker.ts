@@ -1,4 +1,12 @@
-const COMPAT_PATHS = ["/api/generate", "/extract", "/tts", "/render", "/health", "/api/v2/scrape", "/scrape"] as const;
+const COMPAT_PATHS = [
+  "/api/generate",
+  "/extract",
+  "/tts",
+  "/render",
+  "/health",
+  "/api/v2/scrape",
+  "/scrape",
+] as const;
 
 export type WorkerPath =
   | "/api/v1/health"
@@ -14,6 +22,8 @@ export type WorkerPath =
   | "/api/v1/fetch"
   | `/api/v1/fetch/${string}`
   | "/api/v1/ocr"
+  | "/api/v1/cinematic"
+  | "/api/v1/video/produce"
   | `/api/v1/voices/${string}`
   | "/api/v1/masters/en.mp4"
   | "/api/v1/masters/hi.mp4"

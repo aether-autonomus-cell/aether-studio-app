@@ -135,6 +135,75 @@ export function parseDirection(raw: string): Direction | null {
   };
 }
 
+/** Deterministic local scene splitter targeting clean 15-25 word beats. */
+export function splitIntoBeats(
+  raw: string,
+  minWords = 15,
+  maxWords = 25,
+): { text: string; speaker: string }[] {
+  const paragraphs = raw
+    .split(/\n+/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+
+  const beats: { text: string; speaker: string }[] = [];
+  let pendingWords: string[] = [];
+  let pendingSpeaker = "";
+
+  const flush = () => {
+    if (!pendingWords.length) return;
+    beats.push({ text: pendingWords.join(" "), speaker: pendingSpeaker });
+    pendingWords = [];
+    pendingSpeaker = "";
+  };
+
+  for (const paragraph of paragraphs) {
+    const spoken = paragraph.match(/^([^:\n]{1,32}):\s+([\s\S]+)$/);
+    const speaker = spoken?.[1]?.trim() ?? "";
+    const body = spoken?.[2]?.trim() ?? paragraph;
+
+    if (speaker && pendingWords.length > 0 && pendingSpeaker !== speaker) {
+      flush();
+    }
+    if (!pendingWords.length) pendingSpeaker = speaker;
+
+    const sentences = body.match(/[^.!?]+[.!?]+|[^.!?]+$/g) ?? [body];
+    for (const sentence of sentences) {
+      const words = sentence.trim().split(/\s+/).filter(Boolean);
+      if (!words.length) continue;
+
+      for (const word of words) {
+        pendingWords.push(word);
+        if (pendingWords.length >= maxWords) {
+          flush();
+          pendingSpeaker = speaker;
+        }
+      }
+      if (pendingWords.length >= minWords && /[.!?]["”」』']?$/.test(sentence.trim())) {
+        flush();
+        pendingSpeaker = speaker;
+      }
+    }
+
+    if (speaker) flush();
+  }
+  flush();
+
+  // Merge tiny trailing beat (< minWords) into previous beat if combined <= maxWords and same speaker.
+  if (beats.length >= 2) {
+    const last = beats[beats.length - 1]!;
+    const prev = beats[beats.length - 2]!;
+    const lastCount = last.text.split(/\s+/).filter(Boolean).length;
+    const prevCount = prev.text.split(/\s+/).filter(Boolean).length;
+    if (lastCount < minWords && prev.speaker === last.speaker && prevCount + lastCount <= maxWords) {
+      prev.text = `${prev.text} ${last.text}`.trim();
+      beats.pop();
+    }
+  }
+
+  return beats;
+}
+
 export function deterministicDirection(raw: string): Direction {
   const project: Project = cutChapter(raw);
   const cast = gleanCast(project.text, project.characters);
@@ -144,28 +213,7 @@ export function deterministicDirection(raw: string): Direction {
     .filter(Boolean);
   if (paragraphs[0] === project.title) paragraphs.shift();
 
-  const beats: { text: string; speaker: string }[] = [];
-  for (const paragraph of paragraphs) {
-    const spoken = paragraph.match(/^([^:\n]{1,32}):\s+([\s\S]+)$/);
-    const speaker = spoken?.[1]?.trim() ?? "";
-    const body = spoken?.[2]?.trim() ?? paragraph;
-    const sentences = body.match(/[^.!?]+[.!?]+|[^.!?]+$/g) ?? [body];
-    let words: string[] = [];
-    const flush = () => {
-      if (!words.length) return;
-      beats.push({ text: words.join(" "), speaker });
-      words = [];
-    };
-    for (const sentence of sentences) {
-      const sentenceWords = sentence.trim().split(/\s+/).filter(Boolean);
-      for (const word of sentenceWords) {
-        words.push(word);
-        if (words.length >= 20) flush();
-      }
-    }
-    flush();
-  }
-
+  const beats = splitIntoBeats(paragraphs.join("\n"), 15, 25);
   const angles = ["medium shot", "close-up", "wide establishing shot", "over-the-shoulder shot"];
   const scenes: Scene[] = beats.slice(0, 300).map((beat, index) => {
     const subject = cast.find((character) => character.name === beat.speaker);
@@ -186,6 +234,13 @@ export function deterministicDirection(raw: string): Direction {
     };
   });
 
+  const narration = scenes
+    .map((scene) => [scene.caption, scene.dialogue].filter(Boolean).join(" "))
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+
   return {
     title: project.title,
     hook: project.logline,
@@ -193,7 +248,20 @@ export function deterministicDirection(raw: string): Direction {
     timeline: scenes.map((scene, index) => `Panel ${index + 1}: ${scene.state}`),
     characters: cast,
     scenes: scenes.length ? scenes : project.scenes,
-    narration: project.narration,
+    narration: narration || project.narration,
     seo: project.seo,
   };
+}
+
+/** Parse LLM output or recover immediately with deterministic 15-25 word beats and Cast extraction. */
+export function recoverDirection(
+  rawLlmResponse: string,
+  sourceText: string,
+): { direction: Direction; recovered: boolean } {
+  const parsed = parseDirection(rawLlmResponse);
+  if (parsed && parsed.scenes.length > 0) {
+    return { direction: parsed, recovered: false };
+  }
+  const fallbackSource = sourceText.trim() || rawLlmResponse.trim();
+  return { direction: deterministicDirection(fallbackSource), recovered: true };
 }

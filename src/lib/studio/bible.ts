@@ -2,7 +2,7 @@ import type { Character, LocationReference, Scene } from "./model.ts";
 
 export type OutfitChange = { chapter: number; outfit: string };
 
-const FIELD = /^(face|hair|age|scars|eyes|body|outfit)\s*[:\-]\s*(.+)$/i;
+const FIELD = /^(face|hair|age|scars|eyes|body|outfit)\s*[:-]\s*(.+)$/i;
 
 export function outfitAt(changes: OutfitChange[] | undefined, fallback: string, chapter?: number): string {
   if (!chapter || !changes?.length) return fallback.trim();
@@ -58,7 +58,7 @@ export function bibleDocument(characters: Character[]): string {
 export function textToOutfits(value: string): OutfitChange[] {
   const rows: OutfitChange[] = [];
   for (const line of value.split(/\n+/)) {
-    const match = line.trim().match(/^(?:chapter\s*)?(\d+)\s*[:\-]\s*(.+)$/i);
+    const match = line.trim().match(/^(?:chapter\s*)?(\d+)\s*[:-]\s*(.+)$/i);
     if (!match?.[1] || !match[2]) continue;
     const chapter = Number(match[1]);
     const outfit = match[2].trim();

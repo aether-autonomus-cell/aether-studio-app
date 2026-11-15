@@ -1,9 +1,15 @@
-/** WTR-LAB chapter extraction prefers its JSON API, then clean HTML fallbacks. */
+/** WTR-LAB chapter extraction with __NEXT_DATA__ parsing and Agent-Reach ordered fallback chain. */
 
-import { hasUnsafeScrapeMarker, htmlToText } from "./extract.ts";
+import {
+  fetchWithAgentReachFallback,
+  hasUnsafeScrapeMarker,
+  htmlToText,
+  JINA_TARGET_SELECTOR,
+  sanitizeNovelText,
+} from "./extract.ts";
 
 const KEY_TEXT = "IJAFUUxjM25hyzL2AZrn0wl7cESED6Ru";
-const WORKER_SCRAPE_PATHS = ["/api/v2/scrape", "/scrape"] as const;
+const WORKER_SCRAPE_PATHS = ["/api/v1/fetch", "/scrape", "/api/v2/scrape"] as const;
 
 export type WtrTarget = {
   origin: string;
@@ -230,40 +236,14 @@ export function containsHan(text: string): boolean {
 
 function usableChapterHtml(html: string, pageUrl: string): { title: string; text: string } | null {
   if (hasUnsafeScrapeMarker(pageUrl)) return null;
+  // htmlToText parses <script id="__NEXT_DATA__"> JSON first and falls back to clean DOM extraction.
   const extracted = htmlToText(html);
-  if (
-    extracted.text.length < 80 ||
-    hasUnsafeScrapeMarker(`${extracted.title}\n${extracted.text}`)
-  ) {
+  const title = sanitizeNovelText(extracted.title);
+  const text = sanitizeNovelText(extracted.text);
+  if (text.length < 80 || hasUnsafeScrapeMarker(`${title}\n${text}`)) {
     return null;
   }
-  return extracted;
-}
-
-async function readProxyHtml(target: WtrTarget): Promise<{ title: string; text: string } | null> {
-  const encoded = encodeURIComponent(target.referer);
-  const proxies = [
-    `https://api.allorigins.win/raw?url=${encoded}`,
-    `https://api.codetabs.com/v1/proxy?quest=${encoded}`,
-  ];
-  for (const proxyUrl of proxies) {
-    let response: Response;
-    try {
-      response = await fetch(proxyUrl, {
-        method: "GET",
-        redirect: "manual",
-        signal: AbortSignal.timeout(20000),
-        headers: { Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8" },
-      });
-    } catch {
-      continue;
-    }
-    if (!response.ok || hasUnsafeScrapeMarker(response.url || proxyUrl)) continue;
-    const html = (await response.text()).slice(0, 500_000);
-    const chapter = usableChapterHtml(html, response.url || proxyUrl);
-    if (chapter) return chapter;
-  }
-  return null;
+  return { title, text };
 }
 
 function workerResponseHtml(value: unknown): string | null {
@@ -272,6 +252,12 @@ function workerResponseHtml(value: unknown): string | null {
   const row = value as Record<string, unknown>;
   for (const key of ["html", "content", "body", "text"]) {
     if (typeof row[key] === "string") return (row[key] as string).slice(0, 500_000);
+  }
+  if (Array.isArray(row.pages) && row.pages[0] && typeof row.pages[0] === "object") {
+    const page = row.pages[0] as Record<string, unknown>;
+    for (const key of ["html", "text"]) {
+      if (typeof page[key] === "string") return (page[key] as string).slice(0, 500_000);
+    }
   }
   return null;
 }
@@ -291,6 +277,14 @@ export async function fetchWtrChapter(
   target: WtrTarget,
   workerScrape?: WtrWorkerScrape,
 ): Promise<{ title: string; text: string } | null> {
+  // Ordered fallback chain:
+  // a) Connected Colab worker (/api/v1/fetch or /scrape)
+  if (workerScrape) {
+    const fromWorker = await readWorkerHtml(target, workerScrape);
+    if (fromWorker) return fromWorker;
+  }
+
+  // WTR-LAB official JSON API (decrypts AES-GCM payloads when unblocked)
   const headers = browserHeaders(target.referer, true);
   const list = await readJson(
     `${target.origin}/api/chapters/${target.rawId}?start=${target.chapterNo}&end=${target.chapterNo}`,
@@ -334,13 +328,20 @@ export async function fetchWtrChapter(
       if (followed) json = followed;
     }
     const collected = await collectChapterText(json);
-    const text = collected.lines.join("\n\n").trim();
+    const text = sanitizeNovelText(collected.lines.join("\n\n").trim());
     if (text.length < 80 || hasUnsafeScrapeMarker(`${collected.title}\n${text}`)) continue;
-    const title = (meta?.title || collected.title || `Chapter ${target.chapterNo}`).trim();
+    const title = sanitizeNovelText((meta?.title || collected.title || `Chapter ${target.chapterNo}`).trim());
     if (hasUnsafeScrapeMarker(title)) continue;
-    return { title, text };
+    return { title: title || `Chapter ${target.chapterNo}`, text };
   }
-  const proxied = await readProxyHtml(target);
-  if (proxied) return proxied;
-  return workerScrape ? readWorkerHtml(target, workerScrape) : null;
+
+  // b) Codetabs proxy -> c) AllOrigins raw proxy -> d) Jina Reader API
+  const fallback = await fetchWithAgentReachFallback(target.referer, { minLength: 80 });
+  if (fallback) {
+    return { title: fallback.title || `Chapter ${target.chapterNo}`, text: fallback.text };
+  }
+
+  return null;
 }
+
+export { JINA_TARGET_SELECTOR };
