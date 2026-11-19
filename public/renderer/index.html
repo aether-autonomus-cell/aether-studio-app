@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="/renderer/fonts/fonts.css" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #070B16;
+  }
+  #stage {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: #070B16;
+  }
+  #aether-svg-overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="aether-canvas"></canvas>
+  <svg id="aether-svg-overlay" xmlns="http://www.w3.org/2000/svg"></svg>
+</div>
+<script src="/renderer/aether-runtime.js"></script>
+</body>
+</html>

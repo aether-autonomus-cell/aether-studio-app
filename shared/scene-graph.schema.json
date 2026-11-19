@@ -1,0 +1,878 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "aether.2d.job@1"
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 64
+    },
+    "project_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "project": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "object",
+          "properties": {
+            "hi-IN": {
+              "default": "",
+              "type": "string",
+              "maxLength": 4000
+            },
+            "en-US": {
+              "default": "",
+              "type": "string",
+              "maxLength": 4000
+            }
+          },
+          "required": [
+            "hi-IN",
+            "en-US"
+          ],
+          "additionalProperties": false
+        },
+        "mode": {
+          "default": "manhwa-anime",
+          "type": "string",
+          "enum": [
+            "story",
+            "explainer",
+            "manhwa-anime"
+          ]
+        },
+        "visual_mode": {
+          "default": "pure-2d",
+          "type": "string",
+          "enum": [
+            "pure-2d",
+            "hybrid-2d"
+          ]
+        },
+        "languages": {
+          "default": [
+            "hi-IN",
+            "en-US"
+          ],
+          "minItems": 1,
+          "maxItems": 2,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "hi-IN",
+              "en-US"
+            ]
+          }
+        },
+        "voices": {
+          "default": {
+            "hi-IN": "hi-IN-MadhurNeural",
+            "en-US": "en-US-ChristopherNeural"
+          },
+          "type": "object",
+          "properties": {
+            "hi-IN": {
+              "default": "hi-IN-MadhurNeural",
+              "type": "string"
+            },
+            "en-US": {
+              "default": "en-US-ChristopherNeural",
+              "type": "string"
+            }
+          },
+          "required": [
+            "hi-IN",
+            "en-US"
+          ],
+          "additionalProperties": false
+        },
+        "aspect_ratio": {
+          "default": "9:16",
+          "type": "string",
+          "enum": [
+            "9:16",
+            "16:9"
+          ]
+        },
+        "resolution": {
+          "default": "1080p",
+          "type": "string",
+          "enum": [
+            "1080p",
+            "540p"
+          ]
+        },
+        "fps": {
+          "default": 30,
+          "anyOf": [
+            {
+              "type": "number",
+              "const": 24
+            },
+            {
+              "type": "number",
+              "const": 30
+            }
+          ]
+        },
+        "seed": {
+          "default": 42,
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 999999
+        },
+        "style_id": {
+          "default": "midnight-cyan@1",
+          "type": "string",
+          "enum": [
+            "midnight-cyan@1",
+            "crimson-sakuga@1",
+            "amber-explainer@1",
+            "obsidian-gold@1"
+          ]
+        },
+        "scenes": {
+          "minItems": 1,
+          "maxItems": 120,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              },
+              "template_id": {
+                "type": "string",
+                "enum": [
+                  "hook-card@1",
+                  "manhwa-dialogue@1",
+                  "action-pan@1",
+                  "cause-effect@1",
+                  "comparison@1",
+                  "recap-payoff@1",
+                  "custom-canvas@1"
+                ]
+              },
+              "narration": {
+                "type": "object",
+                "properties": {
+                  "hi-IN": {
+                    "default": "",
+                    "type": "string",
+                    "maxLength": 4000
+                  },
+                  "en-US": {
+                    "default": "",
+                    "type": "string",
+                    "maxLength": 4000
+                  }
+                },
+                "required": [
+                  "hi-IN",
+                  "en-US"
+                ],
+                "additionalProperties": false
+              },
+              "duration_hint_sec": {
+                "default": 4.5,
+                "type": "number",
+                "minimum": 1.5,
+                "maximum": 30
+              },
+              "pause_after_ms": {
+                "default": 280,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2000
+              },
+              "transition": {
+                "default": "dissolve",
+                "type": "string",
+                "enum": [
+                  "cut",
+                  "wipe",
+                  "slide",
+                  "dissolve"
+                ]
+              },
+              "props": {
+                "default": {},
+                "type": "object",
+                "properties": {
+                  "headline": {
+                    "type": "object",
+                    "properties": {
+                      "hi-IN": {
+                        "default": "",
+                        "type": "string",
+                        "maxLength": 4000
+                      },
+                      "en-US": {
+                        "default": "",
+                        "type": "string",
+                        "maxLength": 4000
+                      }
+                    },
+                    "required": [
+                      "hi-IN",
+                      "en-US"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "subhead": {
+                    "type": "object",
+                    "properties": {
+                      "hi-IN": {
+                        "default": "",
+                        "type": "string",
+                        "maxLength": 4000
+                      },
+                      "en-US": {
+                        "default": "",
+                        "type": "string",
+                        "maxLength": 4000
+                      }
+                    },
+                    "required": [
+                      "hi-IN",
+                      "en-US"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "emphasis": {
+                    "maxItems": 12,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 80
+                    }
+                  },
+                  "character": {
+                    "type": "object",
+                    "properties": {
+                      "archetype": {
+                        "default": "hero-noir",
+                        "type": "string",
+                        "enum": [
+                          "hero-noir",
+                          "mentor-sage",
+                          "rival-crimson",
+                          "analyst-cyan"
+                        ]
+                      },
+                      "pose": {
+                        "default": "determined",
+                        "type": "string",
+                        "enum": [
+                          "idle",
+                          "determined",
+                          "pointing",
+                          "stride",
+                          "shocked"
+                        ]
+                      },
+                      "gaze": {
+                        "default": "camera",
+                        "type": "string",
+                        "enum": [
+                          "camera",
+                          "left",
+                          "right",
+                          "up"
+                        ]
+                      },
+                      "mouthState": {
+                        "default": "auto",
+                        "type": "string",
+                        "enum": [
+                          "auto",
+                          "closed",
+                          "open",
+                          "shout"
+                        ]
+                      },
+                      "hairFlow": {
+                        "default": 0.65,
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "palette": {
+                        "type": "object",
+                        "properties": {
+                          "coat": {
+                            "type": "string"
+                          },
+                          "accent": {
+                            "type": "string"
+                          },
+                          "hair": {
+                            "type": "string"
+                          },
+                          "skin": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "archetype",
+                      "pose",
+                      "gaze",
+                      "mouthState",
+                      "hairFlow"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "speedLines": {
+                    "type": "object",
+                    "properties": {
+                      "enabled": {
+                        "default": false,
+                        "type": "boolean"
+                      },
+                      "intensity": {
+                        "default": 0.45,
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "originX": {
+                        "default": 0.5,
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "originY": {
+                        "default": 0.45,
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "color": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "enabled",
+                      "intensity",
+                      "originX",
+                      "originY"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "panelReveal": {
+                    "type": "object",
+                    "properties": {
+                      "layout": {
+                        "default": "single",
+                        "type": "string",
+                        "enum": [
+                          "single",
+                          "split-diagonal",
+                          "triptych"
+                        ]
+                      },
+                      "direction": {
+                        "default": "left",
+                        "type": "string",
+                        "enum": [
+                          "left",
+                          "right",
+                          "up"
+                        ]
+                      },
+                      "borderPx": {
+                        "default": 3,
+                        "type": "number",
+                        "minimum": 1,
+                        "maximum": 8
+                      }
+                    },
+                    "required": [
+                      "layout",
+                      "direction",
+                      "borderPx"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "chart": {
+                    "type": "object",
+                    "properties": {
+                      "values": {
+                        "minItems": 1,
+                        "maxItems": 8,
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        }
+                      },
+                      "labels": {
+                        "minItems": 1,
+                        "maxItems": 8,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 40
+                        }
+                      },
+                      "unit": {
+                        "type": "string",
+                        "maxLength": 16
+                      },
+                      "source": {
+                        "type": "string",
+                        "maxLength": 80
+                      }
+                    },
+                    "required": [
+                      "values",
+                      "labels"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "flow": {
+                    "type": "object",
+                    "properties": {
+                      "nodes": {
+                        "minItems": 2,
+                        "maxItems": 6,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "maxLength": 24
+                            },
+                            "label": {
+                              "type": "string",
+                              "maxLength": 48
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "label"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "edges": {
+                        "maxItems": 10,
+                        "type": "array",
+                        "items": {
+                          "type": "array",
+                          "prefixItems": [
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          ],
+                          "items": false,
+                          "minItems": 2,
+                          "maxItems": 2
+                        }
+                      },
+                      "activeStep": {
+                        "default": 0,
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 5
+                      }
+                    },
+                    "required": [
+                      "nodes",
+                      "edges",
+                      "activeStep"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "backdrop": {
+                    "type": "object",
+                    "properties": {
+                      "mood": {
+                        "default": "skyline",
+                        "type": "string",
+                        "enum": [
+                          "skyline",
+                          "temple",
+                          "void-grid",
+                          "storm"
+                        ]
+                      },
+                      "prompt": {
+                        "type": "string",
+                        "maxLength": 400
+                      },
+                      "scrim": {
+                        "default": 0.55,
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 0.95
+                      }
+                    },
+                    "required": [
+                      "mood",
+                      "scrim"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "customCode": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "default": "canvas2d",
+                        "type": "string",
+                        "enum": [
+                          "canvas2d",
+                          "svg",
+                          "p5"
+                        ]
+                      },
+                      "code": {
+                        "type": "string",
+                        "maxLength": 40000
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "code"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              },
+              "camera": {
+                "default": [
+                  {
+                    "at": 0,
+                    "x": 0.5,
+                    "y": 0.5,
+                    "zoom": 1,
+                    "shake": 0
+                  }
+                ],
+                "minItems": 1,
+                "maxItems": 8,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "at": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "x": {
+                      "default": 0.5,
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "y": {
+                      "default": 0.5,
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "zoom": {
+                      "default": 1,
+                      "type": "number",
+                      "minimum": 0.5,
+                      "maximum": 2.5
+                    },
+                    "shake": {
+                      "default": 0,
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 0.25
+                    }
+                  },
+                  "required": [
+                    "at",
+                    "x",
+                    "y",
+                    "zoom",
+                    "shake"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "id",
+              "template_id",
+              "narration",
+              "duration_hint_sec",
+              "pause_after_ms",
+              "transition",
+              "props",
+              "camera"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "bgm": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "track_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "volume": {
+                  "default": 0.14,
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 0.5
+                },
+                "drive_file_id": {
+                  "type": "string",
+                  "maxLength": 128
+                }
+              },
+              "required": [
+                "track_id",
+                "volume"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outputs": {
+          "default": {
+            "save_to_drive": true,
+            "drive_folder": "AetherStudioExports",
+            "captions": [
+              "srt",
+              "vtt"
+            ]
+          },
+          "type": "object",
+          "properties": {
+            "save_to_drive": {
+              "default": true,
+              "type": "boolean"
+            },
+            "drive_folder": {
+              "default": "AetherStudioExports",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "captions": {
+              "default": [
+                "srt",
+                "vtt"
+              ],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "srt",
+                  "vtt"
+                ]
+              }
+            }
+          },
+          "required": [
+            "save_to_drive",
+            "drive_folder",
+            "captions"
+          ],
+          "additionalProperties": false
+        },
+        "publish_targets": {
+          "default": {
+            "hi-IN": {
+              "channel_slot": "hindi",
+              "title": "",
+              "description": "",
+              "tags": [
+                "story",
+                "hindi",
+                "aetherstudio"
+              ],
+              "privacy_status": "private",
+              "made_for_kids": false
+            },
+            "en-US": {
+              "channel_slot": "english",
+              "title": "",
+              "description": "",
+              "tags": [
+                "story",
+                "animation",
+                "aetherstudio"
+              ],
+              "privacy_status": "private",
+              "made_for_kids": false
+            }
+          },
+          "type": "object",
+          "properties": {
+            "hi-IN": {
+              "type": "object",
+              "properties": {
+                "channel_slot": {
+                  "type": "string",
+                  "enum": [
+                    "hindi",
+                    "english"
+                  ]
+                },
+                "title": {
+                  "default": "",
+                  "type": "string",
+                  "maxLength": 100
+                },
+                "description": {
+                  "default": "",
+                  "type": "string",
+                  "maxLength": 5000
+                },
+                "tags": {
+                  "default": [],
+                  "maxItems": 25,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 40
+                  }
+                },
+                "privacy_status": {
+                  "default": "private",
+                  "type": "string",
+                  "enum": [
+                    "private",
+                    "unlisted",
+                    "public"
+                  ]
+                },
+                "made_for_kids": {
+                  "default": false,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "channel_slot",
+                "title",
+                "description",
+                "tags",
+                "privacy_status",
+                "made_for_kids"
+              ],
+              "additionalProperties": false
+            },
+            "en-US": {
+              "type": "object",
+              "properties": {
+                "channel_slot": {
+                  "type": "string",
+                  "enum": [
+                    "hindi",
+                    "english"
+                  ]
+                },
+                "title": {
+                  "default": "",
+                  "type": "string",
+                  "maxLength": 100
+                },
+                "description": {
+                  "default": "",
+                  "type": "string",
+                  "maxLength": 5000
+                },
+                "tags": {
+                  "default": [],
+                  "maxItems": 25,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 40
+                  }
+                },
+                "privacy_status": {
+                  "default": "private",
+                  "type": "string",
+                  "enum": [
+                    "private",
+                    "unlisted",
+                    "public"
+                  ]
+                },
+                "made_for_kids": {
+                  "default": false,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "channel_slot",
+                "title",
+                "description",
+                "tags",
+                "privacy_status",
+                "made_for_kids"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "hi-IN",
+            "en-US"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "title",
+        "mode",
+        "visual_mode",
+        "languages",
+        "voices",
+        "aspect_ratio",
+        "resolution",
+        "fps",
+        "seed",
+        "style_id",
+        "scenes",
+        "bgm",
+        "outputs",
+        "publish_targets"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema_version",
+    "project_id",
+    "project_revision",
+    "project"
+  ],
+  "additionalProperties": false
+}
