@@ -1,20 +1,80 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/renderer/fonts/inter-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/renderer/fonts/inter-latin-600-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/renderer/fonts/inter-latin-700-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/renderer/fonts/space-grotesk-latin-500-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/renderer/fonts/space-grotesk-latin-700-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Noto Sans Devanagari";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/renderer/fonts/noto-sans-devanagari-devanagari-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Noto Sans Devanagari";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/renderer/fonts/noto-sans-devanagari-devanagari-600-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Noto Sans Devanagari";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/renderer/fonts/noto-sans-devanagari-devanagari-700-normal.woff2") format("woff2");
+}
+
+:root {
+  --bg-0: #070b16;
+  --bg-1: #111a2e;
+  --surface: #17243b;
+  --ink: #f5f7ff;
+  --muted: #b8c6de;
+  --cyan: #5de6ff;
+  --violet: #a78bfa;
+  --gold: #ffd166;
+  --crimson: #ff4d6d;
+  --accent-gradient: linear-gradient(135deg, #5de6ff, #a78bfa);
+  --depth-gradient: linear-gradient(155deg, #070b16, #17243b);
+}
+
 @theme {
-  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Fraunces", ui-serif, Georgia, serif;
-  --color-ink: #14110f;
-  --color-ink-2: #1c1815;
-  --color-panel: #26201c;
-  --color-line: #3c332c;
-  --color-paper: #f3eadb;
-  --color-muted: #a39484;
-  --color-cinnabar: #e24b32;
-  --color-seal: #9e2616;
-  --color-ok: #1f7a4d;
-  --color-ok-ink: #e7f6ee;
-  --color-fg: #f6f0e6;
-  --shadow-hairline: 0 0 0 1px rgba(243, 234, 219, 0.1);
+  --font-sans: "Inter", "Noto Sans Devanagari", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", "Noto Sans Devanagari", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
 }
 
 @layer base {
@@ -26,12 +86,15 @@
   html {
     color-scheme: dark;
     -webkit-font-smoothing: antialiased;
+    background-color: var(--bg-0);
   }
 
   body {
     margin: 0;
-    background: var(--color-ink);
-    color: var(--color-fg);
+    background: radial-gradient(circle at 18% 0%, rgba(93, 230, 255, 0.08), transparent 45%),
+      radial-gradient(circle at 85% 15%, rgba(167, 139, 250, 0.08), transparent 45%),
+      var(--bg-0);
+    color: var(--ink);
     font-family: var(--font-sans);
     line-height: 1.5;
     overflow-x: hidden;
@@ -58,8 +121,27 @@
   }
 }
 
-@utility hairline {
-  box-shadow: var(--shadow-hairline);
+.studio-card {
+  background: linear-gradient(165deg, rgba(23, 36, 59, 0.88), rgba(17, 26, 46, 0.94));
+  border: 1px solid rgba(184, 198, 222, 0.14);
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.65);
+}
+
+.studio-input {
+  background: rgba(7, 11, 22, 0.72);
+  border: 1px solid rgba(184, 198, 222, 0.22);
+  color: var(--ink);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.studio-input:focus {
+  outline: none;
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 2px rgba(93, 230, 255, 0.18);
+}
+
+.studio-input::placeholder {
+  color: rgba(184, 198, 222, 0.48);
 }
 
 .screen-pad {
@@ -68,54 +150,4 @@
 
 .dock-safe {
   padding-bottom: env(safe-area-inset-bottom);
-}
-
-.sfx-hit {
-  text-shadow: 0 2px 0 #14110f;
-}
-
-.field,
-.field:focus,
-.field:active {
-  color-scheme: light;
-  background-color: #f3eadb !important;
-  color: #14110f !important;
-  border: 1.5px solid #9e2616;
-  caret-color: #9e2616;
-  opacity: 1;
-  -webkit-text-fill-color: #14110f !important;
-  box-shadow: none;
-}
-
-.field::placeholder {
-  color: #7a6a5c !important;
-  -webkit-text-fill-color: #7a6a5c !important;
-  opacity: 1;
-}
-
-.field:-webkit-autofill,
-.field:-webkit-autofill:hover,
-.field:-webkit-autofill:focus {
-  -webkit-box-shadow: 0 0 0 1000px #f3eadb inset !important;
-  -webkit-text-fill-color: #14110f !important;
-  caret-color: #9e2616;
-}
-
-.badge-ok {
-  background: var(--color-ok);
-  color: var(--color-ok-ink);
-}
-
-.grow-bar {
-  transform-origin: left;
-  animation: aether-grow 1.1s ease-in-out infinite;
-}
-
-@keyframes aether-grow {
-  0% {
-    transform: scaleX(0.08);
-  }
-  100% {
-    transform: scaleX(1);
-  }
 }

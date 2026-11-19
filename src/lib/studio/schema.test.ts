@@ -1,54 +1,53 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
-import { SAMPLE, jobPacket } from "./model.ts";
-import { jobPacketV2Schema, voiceFor } from "./schema.ts";
+import {
+  SCHEMA_VERSION,
+  canonicalJson,
+  createDefaultProject,
+  dimensionsForJob,
+  sceneGraphV1Schema,
+  sha256Hex,
+} from "./schema.ts";
 
-test("sample export is job packet v2", () => {
-  const packet = jobPacket(SAMPLE);
-  const parsed = jobPacketV2Schema.parse(packet);
-  assert.equal(parsed.version, 2);
-  assert.equal(parsed.language, "en");
-  assert.equal(parsed.voice, "en-US-ChristopherNeural");
-  assert.equal(parsed.chapters.length, 1);
-  assert.equal(parsed.chapters[0].scenes.length, 4);
-  const opening = parsed.chapters[0].scenes[0];
-  assert.equal(opening.bubble.speaker, "Ren");
-  assert.match(opening.bubble.text, /pendant/);
-  assert.equal(opening.tiles[0].vessel_id, "ren");
-  assert.ok(opening.tiles[0].characters.includes("ren"));
-  assert.ok(opening.tiles[0].negative.length > 0);
-  assert.ok(opening.tiles[0].prompt.length > 10);
-  const shao = parsed.chapters[0].scenes[2];
-  assert.equal(shao.bubble.speaker, "Shao");
-  assert.equal(shao.tiles[0].vessel_id, "shao");
-  assert.equal(parsed.chapters[0].scenes[1].sfx, "CRACK");
-  assert.equal(Object.hasOwn(parsed.seo, "privacy"), false);
-  assert.equal(parsed.seo.title, SAMPLE.seo.title);
+test("createDefaultProject passes canonical SceneGraphV1 Zod validation", () => {
+  const project = createDefaultProject();
+  const parsed = sceneGraphV1Schema.safeParse(project);
+  assert.equal(parsed.success, true);
+  assert.equal(project.schema_version, SCHEMA_VERSION);
+  assert.deepEqual(project.project.languages, ["hi-IN", "en-US"]);
 });
 
-test("hindi text selects the hindi male voice", () => {
-  const packet = jobPacket({
-    ...SAMPLE,
-    text: "रेन पुल पर खड़ा था। उसने कहा कि कर्ज चुकाना है।",
-    narration: "रेन पुल पर खड़ा था।",
-  });
-  assert.equal(packet.language, "hi");
-  assert.equal(packet.voice, "hi-IN-MadhurNeural");
+test("sceneGraphV1Schema enforces 120-scene ceiling and valid aspect ratios", () => {
+  const base = createDefaultProject();
+  const tooMany = {
+    ...base,
+    project: {
+      ...base.project,
+      scenes: Array.from({ length: 121 }, (_, i) => ({
+        ...base.project.scenes[0],
+        id: `s${i + 1}`,
+      })),
+    },
+  };
+  assert.equal(sceneGraphV1Schema.safeParse(tooMany).success, false);
+  assert.deepEqual(dimensionsForJob("9:16", "1080p"), { width: 1080, height: 1920 });
+  assert.deepEqual(dimensionsForJob("16:9", "540p"), { width: 960, height: 540 });
 });
 
-test("voice selection is fixed by language", () => {
-  assert.equal(voiceFor("en"), "en-US-ChristopherNeural");
-  assert.equal(voiceFor("hi"), "hi-IN-MadhurNeural");
+test("canonicalJson and sha256Hex produce key-order-independent digests", async () => {
+  const a = { b: 2, a: { z: true, m: "hi" } };
+  const b = { a: { m: "hi", z: true }, b: 2 };
+  assert.equal(canonicalJson(a), canonicalJson(b));
+  const h1 = await sha256Hex(canonicalJson(a));
+  const h2 = await sha256Hex(canonicalJson(b));
+  assert.equal(h1, h2);
+  assert.equal(h1.length, 64);
 });
 
-test("youtube privacy stays off the job packet", () => {
-  const packet = jobPacket({ ...SAMPLE, seo: { ...SAMPLE.seo, privacy: "unlisted" } });
-  assert.equal(Object.hasOwn(packet.seo, "privacy"), false);
-  assert.deepEqual(packet.seo.tags, SAMPLE.seo.tags);
-});
-
-test("schema rejects a language outside hi/en", () => {
-  const packet = jobPacket(SAMPLE);
-  const broken = { ...packet, language: "fr" };
-  assert.equal(jobPacketV2Schema.safeParse(broken).success, false);
+test("shared/scene-graph.schema.json matches aether.2d.job@1", () => {
+  const raw = JSON.parse(
+    readFileSync(new URL("../../../shared/scene-graph.schema.json", import.meta.url), "utf8"),
+  ) as { properties?: { schema_version?: { const?: string } } };
+  assert.equal(raw.properties?.schema_version?.const, "aether.2d.job@1");
 });

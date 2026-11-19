@@ -1,34 +1,24 @@
-# Aether Studio
+# Aether Studio v2.0
 
-Phone remote for a motion-comic studio. The chapter is cut in the browser. Painting and the MP4 run on Gemini (server env) or an open-source worker. The shared file is job packet v2 ([docs/job-packet-v2.md](docs/job-packet-v2.md)).
+**Pure 2D Code-to-Video & Dual-Language Story Studio** (Hindi `hi-IN-MadhurNeural` + English `en-US-ChristopherNeural`) for Vercel + Interactive Google Colab.
 
-Chapters stay on the phone (`localStorage`). The worker token stays in the tab (`sessionStorage`). Neither belongs in Git or in Vercel.
+## Architecture Highlights
 
-## Deploy: GitHub → Vercel
+- **Zero-Setup Day-1 Default (Mode A)**: Projects, revisions, and render history persist locally in Browser IndexedDB. Export `aether_job.json` and run directly in Colab with zero database or server secrets required.
+- **Optional Cloud Queue & OAuth (Mode B)**: Automatically activates when `DATABASE_URL` and Google OAuth credentials are configured on Vercel.
+- **4-Tab Mobile-First Shell**:
+  1. **Story**: Up to 30,000-character story input, paired Hindi/English scene-locked narration, keyless AI failover (`Pollinations` → `Colab LLM` → `Local Deterministic`), 21-Hook Generator, Title + 2D Coded Thumbnail Packager, and 9:16 Shorts Extractor.
+  2. **2D Code & Live Preview**: Structured `SceneGraphV1` editor + Isolated Custom 2D Code Mode (`Canvas 2D`, `SVG`, deterministic `p5.js` `noLoop()`) rendered inside a strict-CSP `<iframe sandbox="allow-scripts">` over a nonce-validated `MessageChannel` with bundled Latin + Devanagari fonts.
+  3. **Colab Render**: Compact 20-line Colab bootstrapper (`colab_worker.py` + `worker/*`), cumulative 48 kHz PCM frame timing (zero audio drift), isolated Playwright PNG-to-FFmpeg pipe, segmented rendering up to 600s / 120 scenes, sidechain BGM ducking, and Google Drive auto-save.
+  4. **Direct Publish**: Dual-channel Hindi + English YouTube metadata matrix, SHA-256 bound Publish Manifest, resumable Colab YouTube uploader with Drive checkpoints, and direct Google Drive delivery.
 
-1. Create an empty GitHub repository. Do not commit anything in [.gitignore](.gitignore): `node_modules/`, `.vercel/`, `.grok/`, `artifacts/`, `attachments/`, `.env`, keystores, or APKs.
-2. Push this project to that repository.
-3. In Vercel, choose **Add New… → Project** and import the GitHub repository.
-4. Leave the install command as it is in `vercel.json` (`npm install --omit=dev`). Build command: `npm run build`. Do not set a custom output directory. The Vite config already emits the Vercel/Nitro output.
-5. Add the environment variables below, then deploy.
+## Local Development & Verification
 
-The live site is the installable page (manifest, icons, service worker). See [docs/APK.md](docs/APK.md) if you later want an Android package. No APK is in this repository.
-
-## Environment variables
-
-Set these in **Vercel → Project → Settings → Environment Variables**. Use Production and Preview. Do not prefix a secret with `VITE_` — that copies it into the browser bundle.
-
-| Name | Where | Required? | What it is |
-| --- | --- | --- | --- |
-| `GEMINI_API_KEY` | Optional server fallback. Settings also accepts a key and stores it in this browser's `localStorage`. Never commit a key. | No. Direct, paint, and Gemini voice use the key from Settings first. | Key from [Google AI Studio](https://aistudio.google.com/apikey). |
-| `DATABASE_URL` | Server only, if you later add your own SQL migrations at `migrations/*.sql`. | No. | This studio does not store chapters in a database. `npm run build` skips migrate when this is unset. The auth SQL under `migrations/auth/` is not applied. |
-| Worker URL | Not an env var. Typed in **Settings** on the phone. | Only for Live worker mode. | Public `https://…` origin of your worker. Private hosts stay blocked. |
-| Worker token | Not an env var. Typed in **Settings**. Header `X-Aether-Token` only. | Only for Live worker mode. | Stays in `sessionStorage`. It is not written into `job.json` or this README. |
-
-Do **not** set `XAI_API_KEY` for this app. Grok generate calls are off (`xaiEnabled` is false).
-
-Platform hosts may inject their own `VITE_AUTH_ENABLED`, `BETTER_AUTH_*`, or `GROK_*` values. This studio does not ask visitors to sign in. Leave auth off unless you are deliberately adding accounts.
-
-## YouTube
-
-The YouTube tab is a preview card: title, description, tags, and privacy (public, unlisted, or private). It does not sign in and it does not upload. Privacy is not part of job packet v2.
+```bash
+npm install
+npm run typecheck
+npm run lint
+npm test
+npm run build
+python3 -m py_compile colab_worker.py worker/*.py
+```
