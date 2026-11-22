@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import type { KrSceneCheckpoint, KrWorkerEvent } from "@/packages/contracts/schemas";
 import { postWorkerCheckpoint } from "@/server/katharift/repository";
+import { krErrorResponse } from "@/server/katharift/route-errors";
 
 export const Route = createFileRoute("/api/kr/worker/checkpoint")({
   server: {
@@ -44,9 +45,7 @@ export const Route = createFileRoute("/api/kr/worker/checkpoint")({
           });
           return Response.json({ job: updatedJob });
         } catch (err) {
-          const msg = err instanceof Error ? err.message : "Checkpoint failed";
-          const status = msg.includes("lease_token") ? 409 : 400;
-          return Response.json({ error: msg }, { status });
+          return krErrorResponse(err, "Checkpoint failed");
         }
       },
     },

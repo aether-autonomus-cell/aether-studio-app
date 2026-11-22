@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import { getSql } from "../../lib/db.ts";
+import { getDbPolicy, getSql } from "../../lib/db.ts";
+import { ProjectNotFoundError } from "./route-errors.ts";
 import {
   DEFAULT_ZERO_SPEND_POLICY,
   KrJobV1Schema,
@@ -147,7 +148,7 @@ export async function loadWorkspaceState(userId: string, projectId: string) {
   `;
 
   if (projRows.length === 0) {
-    throw new Error("Project not found");
+    throw new ProjectNotFoundError("Project not found");
   }
   const project = projRows[0];
 
@@ -311,8 +312,14 @@ export async function loadWorkspaceState(userId: string, projectId: string) {
 
   const activeWorker = workerSessions.some((w) => w.status === "active");
   const skillsReport = evaluateSkillRegistry({ verifyHashes: false, workerActive: activeWorker });
+  const dbPolicy = getDbPolicy();
 
   return {
+    runtime: {
+      db_mode: dbPolicy.mode,
+      is_ephemeral_fixture: dbPolicy.isEphemeralFixture,
+      label: dbPolicy.label,
+    },
     project,
     storyRevision: {
       revision_id: storyRow.revision_id,
@@ -711,6 +718,14 @@ export async function createWorkerPairingSession(
   runtimeKind: "colab_free_gpu" | "local_python_worker" = "colab_free_gpu",
 ) {
   const sql = await getSql();
+  const owned = await sql<{ project_id: string }>`
+    SELECT project_id FROM kr_projects
+    WHERE project_id = ${projectId} AND user_id = ${userId}
+    LIMIT 1
+  `;
+  if (owned.length === 0) {
+    throw new ProjectNotFoundError("Project not found");
+  }
   const workerSessionId = newId("ws");
   const pairingCode = `KR-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
   const codeHash = hashPairingCode(pairingCode);
@@ -829,6 +844,9 @@ export async function postWorkerCheckpoint(params: {
   }
 
   const job = parseJsonCol<KrJobV1>(row.job_json);
+  if (job.worker_session_id && job.worker_session_id !== params.workerSessionId) {
+    throw new Error("Mismatched worker_session_id (session fencing rejected)");
+  }
   const cpIdx = job.checkpoints.findIndex((c) => c.scene_id === params.sceneId);
   if (cpIdx < 0) throw new Error(`Scene checkpoint ${params.sceneId} not found`);
 

@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { authenticateApiRequest } from "@/server/katharift/auth-guard";
 import { confirmAndEnqueueProductionJob } from "@/server/katharift/repository";
+import { krErrorResponse } from "@/server/katharift/route-errors";
 
 export const Route = createFileRoute("/api/kr/jobs/confirm")({
   server: {
@@ -30,10 +31,7 @@ export const Route = createFileRoute("/api/kr/jobs/confirm")({
           });
           return Response.json(res);
         } catch (err) {
-          return Response.json(
-            { error: err instanceof Error ? err.message : "Failed to confirm production job" },
-            { status: 400 },
-          );
+          return krErrorResponse(err, "Failed to confirm production job");
         }
       },
     },

@@ -157,6 +157,11 @@ function StudioShell() {
             </div>
           </div>
         </div>
+        {workspace?.runtime?.is_ephemeral_fixture && (
+          <div className="flex items-center justify-center gap-2 bg-amber-500/15 px-3 py-1.5 text-xs font-medium text-amber-200">
+            LOCAL FIXTURE MODE · Ephemeral in-memory PGLite active (data resets on restart)
+          </div>
+        )}
         {isOffline && (
           <div className="flex items-center justify-center gap-2 bg-amber-500/15 px-3 py-1.5 text-xs text-amber-200">
             <WifiOff className="h-3.5 w-3.5" /> Offline mode · local story draft preserved for
@@ -172,8 +177,16 @@ function StudioShell() {
             Loading KathaRift Studio workspace…
           </div>
         ) : loadError || !workspace ? (
-          <div className="kr-card rounded-2xl p-6 text-center">
-            <p className="text-sm text-rose-300">{loadError ?? "Workspace unavailable"}</p>
+          <div className="kr-card rounded-2xl border border-amber-400/25 p-6 text-center">
+            <p className="text-sm font-semibold text-rose-300">
+              {loadError ?? "Workspace unavailable"}
+            </p>
+            <p className="mt-2 text-xs text-[var(--kr-muted)]">
+              Preview/production requires durable PostgreSQL (<code>DATABASE_URL</code>) and
+              server auth secrets (<code>BETTER_AUTH_SECRET</code>,{" "}
+              <code>GROK_AUTH_CLIENT_ID</code>, <code>GROK_AUTH_CLIENT_SECRET</code>). Server auth
+              fails closed and is never bypassed by frontend flags.
+            </p>
             <button
               type="button"
               onClick={() => void refreshWorkspace()}

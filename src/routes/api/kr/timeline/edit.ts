@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import type { KrTimelineV1 } from "@/packages/contracts/schemas";
 import { authenticateApiRequest } from "@/server/katharift/auth-guard";
 import { saveTimelineEditRevision } from "@/server/katharift/repository";
+import { krErrorResponse } from "@/server/katharift/route-errors";
 
 export const Route = createFileRoute("/api/kr/timeline/edit")({
   server: {
@@ -40,10 +41,7 @@ export const Route = createFileRoute("/api/kr/timeline/edit")({
           }
           return Response.json(res);
         } catch (err) {
-          return Response.json(
-            { error: err instanceof Error ? err.message : "Failed to save timeline edit" },
-            { status: 400 },
-          );
+          return krErrorResponse(err, "Failed to save timeline edit");
         }
       },
     },

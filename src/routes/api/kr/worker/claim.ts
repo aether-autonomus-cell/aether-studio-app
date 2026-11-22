@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { claimJobForWorker } from "@/server/katharift/repository";
+import { krErrorResponse } from "@/server/katharift/route-errors";
 
 export const Route = createFileRoute("/api/kr/worker/claim")({
   server: {
@@ -22,10 +23,7 @@ export const Route = createFileRoute("/api/kr/worker/claim")({
           });
           return Response.json(claimed);
         } catch (err) {
-          return Response.json(
-            { error: err instanceof Error ? err.message : "Worker claim rejected" },
-            { status: 403 },
-          );
+          return krErrorResponse(err, "Worker claim rejected", 403);
         }
       },
     },

@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { authenticateApiRequest } from "@/server/katharift/auth-guard";
 import { createOrRenderExport } from "@/server/katharift/repository";
+import { krErrorResponse } from "@/server/katharift/route-errors";
 
 export const Route = createFileRoute("/api/kr/exports")({
   server: {
@@ -25,10 +26,7 @@ export const Route = createFileRoute("/api/kr/exports")({
           });
           return Response.json(result);
         } catch (err) {
-          return Response.json(
-            { error: err instanceof Error ? err.message : "Export failed" },
-            { status: 400 },
-          );
+          return krErrorResponse(err, "Export failed");
         }
       },
     },

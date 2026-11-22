@@ -11,6 +11,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { isMigrationFile, migrationName, pendingMigrations } from "./migration-plan.mjs";
+import {
+  checkMigrationPreconditions,
+  downMigrationFileName,
+  parseMigrateArgs,
+} from "./migrate.mjs";
 import { projectRoot } from "./with-app-env.mjs";
 
 const AUTH_MIGRATION = "0001_auth.sql";
@@ -90,4 +95,52 @@ test("the copy check reads both files and catches an edit", () => {
   writeFileSync(join(root, "migrations", AUTH_MIGRATION), "create table t (x int);\n");
   const drifted = authSchemaCopy(root);
   assert.notEqual(drifted.copy, drifted.source);
+});
+
+test("npm run build does not invoke db:migrate automatically", () => {
+  const pkg = JSON.parse(readFileSync(join(projectRoot(), "package.json"), "utf8"));
+  assert.equal(
+    pkg.scripts.build.includes("db:migrate"),
+    false,
+    "build script must never auto-run db:migrate against shared/production DB",
+  );
+});
+
+test("migrate.mjs blocks preview environments and missing DATABASE_URL", () => {
+  const preview = checkMigrationPreconditions({
+    env: { VERCEL_ENV: "preview", DATABASE_URL: "postgres://shared/prod" },
+    mode: "apply",
+  });
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, "PREVIEW_MIGRATION_BLOCKED");
+
+  const previewDown = checkMigrationPreconditions({
+    env: { VERCEL_ENV: "preview", DATABASE_URL: "postgres://shared/prod" },
+    mode: "down",
+  });
+  assert.equal(previewDown.ok, false);
+  assert.equal(previewDown.code, "PREVIEW_MIGRATION_BLOCKED");
+
+  const missingUrl = checkMigrationPreconditions({ env: {}, mode: "apply" });
+  assert.equal(missingUrl.ok, false);
+  assert.equal(missingUrl.code, "DATABASE_URL_MISSING");
+
+  const ok = checkMigrationPreconditions({
+    env: { VERCEL_ENV: "production", DATABASE_URL: "postgres://prod/db" },
+    mode: "apply",
+  });
+  assert.equal(ok.ok, true);
+});
+
+test("migrate.mjs argument parser and down-migration mapping match reversible files", () => {
+  assert.deepEqual(parseMigrateArgs(["--status"]), { mode: "status", target: null });
+  assert.deepEqual(parseMigrateArgs(["--down", "0002_katharift.sql"]), {
+    mode: "down",
+    target: "0002_katharift.sql",
+  });
+  assert.equal(downMigrationFileName("0002_katharift.sql"), "0002_katharift.down.sql");
+  assert.equal(
+    existsSync(join(projectRoot(), "migrations/down", downMigrationFileName("0002_katharift.sql"))),
+    true,
+  );
 });

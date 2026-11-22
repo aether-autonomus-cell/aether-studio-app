@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { authenticateApiRequest } from "@/server/katharift/auth-guard";
 import { createStoryPatchProposal } from "@/server/katharift/repository";
+import { krErrorResponse } from "@/server/katharift/route-errors";
 
 export const Route = createFileRoute("/api/kr/story/propose")({
   server: {
@@ -28,10 +29,7 @@ export const Route = createFileRoute("/api/kr/story/propose")({
           );
           return Response.json(result);
         } catch (err) {
-          return Response.json(
-            { error: err instanceof Error ? err.message : "Failed to propose story patch" },
-            { status: 400 },
-          );
+          return krErrorResponse(err, "Failed to propose story patch");
         }
       },
     },

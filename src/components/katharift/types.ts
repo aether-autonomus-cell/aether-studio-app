@@ -14,6 +14,11 @@ export type PrimaryTab = "story" | "production" | "editor" | "exports";
 export type StudioDrawer = "none" | "settings" | "canon" | "assets" | "connections" | "activity";
 
 export interface WorkspaceSnapshot {
+  runtime?: {
+    db_mode: "neon" | "local_fixture_pglite" | "unconfigured";
+    is_ephemeral_fixture: boolean;
+    label: string;
+  };
   project: {
     project_id: string;
     title: string;

@@ -1,0 +1,65 @@
+name: KathaRift Studio CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, "arena/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node-checks:
+    name: Typecheck, Lint, Unit/Contract Tests & Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Verify offline skill registry & SHA-256 checksums
+        run: npm run provision:skills
+
+      - name: Verify contract JSON Schema generation
+        run: npm run build:schema
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Unit, contract, auth & DB-policy tests
+        run: npm test
+
+      - name: Production build (no DB migration side effects)
+        run: npm run build
+
+  python-checks:
+    name: Python Worker & Waterfall Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Python worker unit tests
+        run: npm run test:python

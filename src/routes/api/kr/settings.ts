@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import type { KrSettingsSnapshot } from "@/packages/contracts/schemas";
 import { authenticateApiRequest } from "@/server/katharift/auth-guard";
 import { saveSettingsRevision } from "@/server/katharift/repository";
+import { krErrorResponse } from "@/server/katharift/route-errors";
 
 export const Route = createFileRoute("/api/kr/settings")({
   server: {
@@ -31,10 +32,7 @@ export const Route = createFileRoute("/api/kr/settings")({
           const result = await saveSettingsRevision(auth.userId, body.project_id, body.snapshot);
           return Response.json(result);
         } catch (err) {
-          return Response.json(
-            { error: err instanceof Error ? err.message : "Failed to save settings revision" },
-            { status: 400 },
-          );
+          return krErrorResponse(err, "Failed to save settings revision");
         }
       },
     },

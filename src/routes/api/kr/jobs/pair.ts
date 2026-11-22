@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { authenticateApiRequest } from "@/server/katharift/auth-guard";
 import { createWorkerPairingSession } from "@/server/katharift/repository";
+import { krErrorResponse } from "@/server/katharift/route-errors";
 
 export const Route = createFileRoute("/api/kr/jobs/pair")({
   server: {
@@ -25,10 +26,7 @@ export const Route = createFileRoute("/api/kr/jobs/pair")({
           );
           return Response.json(session);
         } catch (err) {
-          return Response.json(
-            { error: err instanceof Error ? err.message : "Failed to create worker pairing session" },
-            { status: 400 },
-          );
+          return krErrorResponse(err, "Failed to create worker pairing session");
         }
       },
     },

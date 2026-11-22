@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { authenticateApiRequest } from "@/server/katharift/auth-guard";
 import { upsertConnection } from "@/server/katharift/repository";
+import { krErrorResponse } from "@/server/katharift/route-errors";
 
 export const Route = createFileRoute("/api/kr/connections")({
   server: {
@@ -27,10 +28,7 @@ export const Route = createFileRoute("/api/kr/connections")({
           });
           return Response.json(res);
         } catch (err) {
-          return Response.json(
-            { error: err instanceof Error ? err.message : "Failed to save connection" },
-            { status: 400 },
-          );
+          return krErrorResponse(err, "Failed to save connection");
         }
       },
     },

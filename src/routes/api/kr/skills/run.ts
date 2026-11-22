@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { dispatchSkillTool, type SkillToolName } from "@/packages/skill-runtime/index";
 import { authenticateApiRequest } from "@/server/katharift/auth-guard";
 import { recordSkillTrace, runPackagingSkillCheck } from "@/server/katharift/repository";
+import { krErrorResponse } from "@/server/katharift/route-errors";
 
 export const Route = createFileRoute("/api/kr/skills/run")({
   server: {
@@ -19,25 +20,29 @@ export const Route = createFileRoute("/api/kr/skills/run")({
           thumbnail_text?: string;
         };
 
-        if (body.mode === "packaging_audit") {
-          if (!body.project_id || !body.title?.trim()) {
-            return Response.json({ error: "project_id and title required" }, { status: 400 });
+        try {
+          if (body.mode === "packaging_audit") {
+            if (!body.project_id || !body.title?.trim()) {
+              return Response.json({ error: "project_id and title required" }, { status: 400 });
+            }
+            const res = await runPackagingSkillCheck(
+              auth.userId,
+              body.project_id,
+              body.title.trim(),
+              body.thumbnail_text,
+            );
+            return Response.json(res);
           }
-          const res = await runPackagingSkillCheck(
-            auth.userId,
-            body.project_id,
-            body.title.trim(),
-            body.thumbnail_text,
-          );
-          return Response.json(res);
-        }
 
-        if (!body.tool_name) {
-          return Response.json({ error: "tool_name is required" }, { status: 400 });
+          if (!body.tool_name) {
+            return Response.json({ error: "tool_name is required" }, { status: 400 });
+          }
+          const res = dispatchSkillTool(body.tool_name, body.args ?? {});
+          await recordSkillTrace(auth.userId, body.project_id ?? null, res.trace);
+          return Response.json(res);
+        } catch (err) {
+          return krErrorResponse(err, "Skill execution failed");
         }
-        const res = dispatchSkillTool(body.tool_name, body.args ?? {});
-        await recordSkillTrace(auth.userId, body.project_id ?? null, res.trace);
-        return Response.json(res);
       },
     },
   },

@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { authenticateApiRequest } from "@/server/katharift/auth-guard";
 import { resolveStoryPatch, toggleSceneCanonLock } from "@/server/katharift/repository";
+import { krErrorResponse } from "@/server/katharift/route-errors";
 
 export const Route = createFileRoute("/api/kr/story/patch")({
   server: {
@@ -45,10 +46,7 @@ export const Route = createFileRoute("/api/kr/story/patch")({
           }
           return Response.json(res);
         } catch (err) {
-          return Response.json(
-            { error: err instanceof Error ? err.message : "Failed to resolve patch" },
-            { status: 400 },
-          );
+          return krErrorResponse(err, "Failed to resolve patch");
         }
       },
     },
