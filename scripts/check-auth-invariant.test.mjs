@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtempSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -12,7 +12,7 @@ import {
   compareAuthInvariant,
   probeDevAuthEnabled,
 } from "./check-auth-invariant.mjs";
-import { projectRoot } from "./with-app-env.mjs";
+import { projectRoot, readAppEnv } from "./with-app-env.mjs";
 
 /**
  * The JSON body `/__app-env` would serve. Do not start a real Vite server —
@@ -90,9 +90,16 @@ test("only a divergence warns the smoke verdict", () => {
   }
 });
 
-test("the build side resolves the template's shipped app-env", () => {
-  assert.equal(buildAuthEnabled(projectRoot(), {}), false);
+test("the build side resolves app-env when present and fails safe when absent", () => {
+  const expectedOnDisk = authEnabledFromEnvValue(readAppEnv(projectRoot()).VITE_AUTH_ENABLED);
+  assert.equal(buildAuthEnabled(projectRoot(), {}), expectedOnDisk);
   assert.equal(buildAuthEnabled(projectRoot(), { VITE_AUTH_ENABLED: "true" }), true);
+
+  const dir = mkdtempSync(join(tmpdir(), "app-env-"));
+  mkdirSync(join(dir, ".grok"), { recursive: true });
+  writeFileSync(join(dir, ".grok/app-env.json"), JSON.stringify({ VITE_AUTH_ENABLED: "false" }));
+  assert.equal(buildAuthEnabled(dir, {}), false);
+  assert.equal(buildAuthEnabled(dir, { VITE_AUTH_ENABLED: "true" }), true);
 });
 
 test("the CLI reports rather than silently passing when run via a symlink", async () => {
