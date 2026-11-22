@@ -1,0 +1,31 @@
+{
+  "schema_version": "kr.skill.manifest.v1",
+  "skill_id": "lemo.audio_sfx",
+  "name": "Lemo-Opuscar Procedural SFX (MIT Code Only)",
+  "kind": "executable",
+  "source_repo": "https://github.com/lemomo-ai/lemo-opuscar",
+  "source_commit": "f9e204293930952b61ba921cd8944d05f121beee",
+  "spdx_license": "MIT",
+  "licence_state": "approved",
+  "runtime": "worker.media",
+  "profiles": [
+    "worker"
+  ],
+  "adapter": "kr_lemo_sfx_v1",
+  "tools": [
+    "synthesize_sfx"
+  ],
+  "instruction_files": [],
+  "entrypoint_files": [
+    "skills/vendor/lemo-opuscar/LICENSE",
+    "skills/vendor/lemo-opuscar/LICENSES/MIT.txt",
+    "skills/vendor/lemo-opuscar/REUSE.toml",
+    "skills/vendor/lemo-opuscar/core/audio/sfx.py"
+  ],
+  "prerequisites": [
+    "numpy",
+    "scipy",
+    "active_permitted_worker"
+  ],
+  "notes": "MIT procedural 48 kHz SFX synthesizer (whoosh, thump, rumble, crash) verified from REUSE.toml."
+}

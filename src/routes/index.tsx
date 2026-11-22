@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { StudioApp } from "@/components/studio/app";
+import { KathaRiftStudioApp } from "@/components/katharift/KathaRiftStudioApp";
 
 export const Route = createFileRoute("/")({ component: Home });
 
 function Home() {
-  return <StudioApp />;
+  return <KathaRiftStudioApp />;
 }

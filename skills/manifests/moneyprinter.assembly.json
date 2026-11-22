@@ -1,0 +1,31 @@
+{
+  "schema_version": "kr.skill.manifest.v1",
+  "skill_id": "moneyprinter.assembly",
+  "name": "MoneyPrinterTurbo Media Assembly Helpers",
+  "kind": "executable",
+  "source_repo": "https://github.com/harry0703/MoneyPrinterTurbo",
+  "source_commit": "86e45a2233a72c41d83389ac5cb49bbf5f6a847d",
+  "spdx_license": "MIT",
+  "licence_state": "approved",
+  "runtime": "worker.media",
+  "profiles": [
+    "worker"
+  ],
+  "adapter": "kr_mpt_assembly_v1",
+  "tools": [
+    "verify_media",
+    "prepare_export"
+  ],
+  "instruction_files": [],
+  "entrypoint_files": [
+    "skills/vendor/money-printer-turbo/LICENSE",
+    "skills/vendor/money-printer-turbo/app/services/subtitle.py",
+    "skills/vendor/money-printer-turbo/app/services/utils/video_effects.py"
+  ],
+  "prerequisites": [
+    "python>=3.10",
+    "ffmpeg",
+    "active_permitted_worker"
+  ],
+  "notes": "MIT subtitle/video effect helpers normalized behind KathaRift worker adapter; no stock-footage replacement or standalone UI."
+}

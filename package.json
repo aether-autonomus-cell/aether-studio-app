@@ -8,9 +8,10 @@
   },
   "scripts": {
     "dev": "node scripts/with-app-env.mjs vite dev --host 0.0.0.0 --port 8080",
-    "build:renderer": "node scripts/build-renderer.mjs",
+    "provision:skills": "node scripts/provision-skills.mjs --profile app",
+    "provision:worker": "node scripts/provision-skills.mjs --profile worker",
     "build:schema": "node --experimental-strip-types scripts/build-schema.mjs",
-    "build": "npm run build:renderer && npm run build:schema && node scripts/with-app-env.mjs vite build && npm run db:migrate",
+    "build": "npm run provision:skills && npm run build:schema && node scripts/with-app-env.mjs vite build && npm run db:migrate",
     "db:migrate": "node scripts/migrate.mjs",
     "build:dev": "node scripts/with-app-env.mjs vite build --mode development",
     "preview": "node scripts/with-app-env.mjs vite preview",
@@ -18,7 +19,8 @@
     "preview:stop": "node scripts/preview.mjs stop",
     "typecheck": "tsc --noEmit",
     "check:auth": "node scripts/check-auth-invariant.mjs",
-    "test": "node --experimental-strip-types --test src/lib/studio/*.test.ts src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/lib/preview-path-prefix.test.ts && node --test scripts/browser-smoke-verdict.test.mjs scripts/check-auth-invariant.test.mjs scripts/migration-plan.test.mjs scripts/preview.test.mjs scripts/sign-out-plan.test.mjs",
+    "test": "node --experimental-strip-types --test src/packages/*/*.test.ts src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/lib/preview-path-prefix.test.ts && node --test scripts/browser-smoke-verdict.test.mjs scripts/check-auth-invariant.test.mjs scripts/migration-plan.test.mjs scripts/preview.test.mjs scripts/sign-out-plan.test.mjs",
+    "test:python": "python3 -m unittest discover -s worker/tests -p 'test_*.py'",
     "lint": "eslint .",
     "format": "prettier --write ."
   },

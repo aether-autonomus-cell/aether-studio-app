@@ -1,0 +1,37 @@
+{
+  "schema_version": "kr.skill.manifest.v1",
+  "skill_id": "cinematic.director",
+  "name": "Cinematic Skill Director & Beat/Mix Pack",
+  "kind": "hybrid",
+  "source_repo": "https://github.com/Moh4696/cinematic-skill",
+  "source_commit": "bf435561c6203f90f971300efe952b68b5ec3417",
+  "spdx_license": "MIT",
+  "licence_state": "approved",
+  "runtime": "app.server",
+  "profiles": [
+    "app",
+    "worker"
+  ],
+  "adapter": "kr_cinematic_v1",
+  "tools": [
+    "cinematic_lint_beats",
+    "plan_chapter"
+  ],
+  "instruction_files": [
+    "skills/vendor/cinematic-skill/skills/cinematic-film/SKILL.md",
+    "skills/vendor/cinematic-skill/skills/cinematic-film/references/story.md",
+    "skills/vendor/cinematic-skill/skills/cinematic-film/references/film.md",
+    "skills/vendor/cinematic-skill/skills/cinematic-film/references/sound.md",
+    "skills/vendor/cinematic-skill/skills/cinematic-film/references/voice.md",
+    "skills/vendor/cinematic-skill/skills/cinematic-film/references/performance.md"
+  ],
+  "entrypoint_files": [
+    "skills/vendor/cinematic-skill/LICENSE",
+    "skills/vendor/cinematic-skill/skills/cinematic-film/scripts/make_beats.py",
+    "skills/vendor/cinematic-skill/skills/cinematic-film/scripts/captions.py",
+    "skills/vendor/cinematic-skill/skills/cinematic-film/scripts/mix_soundtrack.py",
+    "skills/vendor/cinematic-skill/skills/cinematic-film/scripts/build_sfx.py"
+  ],
+  "prerequisites": [],
+  "notes": "MIT instructions loaded by Story/Director orchestrator; make_beats/captions/mix scripts provisioned for worker & local smoke validation."
+}

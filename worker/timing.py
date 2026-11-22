@@ -1,75 +1,85 @@
-"""Deterministic cumulative PCM sample -> integer frame boundary math.
-Must match src/lib/studio/timing.ts bit-for-bit.
-"""
-
+"""KathaRift Studio — Canonical 24 fps / 48,000 Hz Timing Math (Python parity with timing.ts)."""
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Iterable, List
 
-PCM_SAMPLE_RATE = 48_000
-
-
-def compute_cumulative_boundaries(durations_samples: list[int], fps: int) -> list[int]:
-    boundaries: list[int] = [0]
-    cumulative = 0
-    for raw in durations_samples:
-        samples = max(0, int(round(raw)))
-        cumulative += samples
-        raw_frame = int(round((cumulative * fps) / PCM_SAMPLE_RATE))
-        prev = boundaries[-1]
-        frame = max(prev + 1, raw_frame) if samples > 0 else prev
-        boundaries.append(frame)
-    return boundaries
+KR_FPS = 24
+KR_SAMPLE_RATE = 48_000
+KR_SAMPLES_PER_FRAME = KR_SAMPLE_RATE // KR_FPS  # 2000
 
 
-def build_timeline_from_speech(
-    scene_audios: list[dict[str, Any]],
-    fps: int,
-) -> dict[str, Any]:
-    totals = [
-        max(0, int(round(s["speech_samples"]))) + max(0, int(round(s["pause_samples"])))
-        for s in scene_audios
-    ]
-    boundaries = compute_cumulative_boundaries(totals, fps)
-    scenes: list[dict[str, Any]] = []
+@dataclass(frozen=True)
+class HalfOpenFrameSpan:
+    in_frame: int
+    out_frame: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.in_frame, int) or not isinstance(self.out_frame, int):
+            raise ValueError(f"Frame bounds must be integers: {(self.in_frame, self.out_frame)}")
+        if self.in_frame < 0:
+            raise ValueError(f"in_frame must be >= 0 (got {self.in_frame})")
+        if self.out_frame <= self.in_frame:
+            raise ValueError(f"Half-open interval requires out_frame > in_frame ({self.in_frame}, {self.out_frame})")
+
+    @property
+    def duration_frames(self) -> int:
+        return self.out_frame - self.in_frame
+
+
+def round_half_away_from_zero(value: float) -> int:
+    """Match JS Math.round for non-negative numbers: floor(x + 0.5)."""
+    if value < 0:
+        raise ValueError(f"Expected non-negative value, got {value}")
+    return int(value + 0.5)
+
+
+def samples_to_frames_round(samples: int | float) -> int:
+    if samples < 0:
+        raise ValueError(f"samples must be >= 0 (got {samples})")
+    return round_half_away_from_zero((float(samples) * KR_FPS) / KR_SAMPLE_RATE)
+
+
+def frames_to_samples(frames: int) -> int:
+    if not isinstance(frames, int) or frames < 0:
+        raise ValueError(f"frames must be a non-negative integer (got {frames})")
+    return round_half_away_from_zero((float(frames) * KR_SAMPLE_RATE) / KR_FPS)
+
+
+def ms_to_frames_round(ms: int | float) -> int:
+    if ms < 0:
+        raise ValueError(f"ms must be >= 0 (got {ms})")
+    return round_half_away_from_zero((float(ms) * KR_FPS) / 1000.0)
+
+
+def frames_to_ms(frames: int) -> int:
+    if not isinstance(frames, int) or frames < 0:
+        raise ValueError(f"frames must be a non-negative integer (got {frames})")
+    return round_half_away_from_zero((float(frames) * 1000.0) / KR_FPS)
+
+
+def allocate_cumulative_frame_spans(
+    sample_counts: Iterable[int],
+    min_frames_per_scene: int = 24,
+) -> List[HalfOpenFrameSpan]:
+    spans: List[HalfOpenFrameSpan] = []
     cumulative_samples = 0
+    prev_end_frame = 0
 
-    for idx, item in enumerate(scene_audios):
-        speech_samples = max(0, int(round(item["speech_samples"])))
-        pause_samples = max(0, int(round(item["pause_samples"])))
-        start_sample = cumulative_samples
-        speech_end_sample = start_sample + speech_samples
-        end_sample = speech_end_sample + pause_samples
-        cumulative_samples = end_sample
+    for raw_count in sample_counts:
+        count = max(0, int(round(raw_count)))
+        cumulative_samples += count
+        raw_end_frame = samples_to_frames_round(cumulative_samples)
+        end_frame = max(prev_end_frame + min_frames_per_scene, raw_end_frame)
+        spans.append(HalfOpenFrameSpan(in_frame=prev_end_frame, out_frame=end_frame))
+        prev_end_frame = end_frame
+    return spans
 
-        start_frame = boundaries[idx]
-        end_frame = boundaries[idx + 1]
-        raw_speech_end = int(round((speech_end_sample * fps) / PCM_SAMPLE_RATE))
-        speech_end_frame = max(start_frame, min(end_frame, raw_speech_end))
 
-        scenes.append(
-            {
-                "id": item["id"],
-                "index": idx,
-                "startSample": start_sample,
-                "speechEndSample": speech_end_sample,
-                "endSample": end_sample,
-                "startFrame": start_frame,
-                "speechEndFrame": speech_end_frame,
-                "endFrame": end_frame,
-                "frameCount": max(1, end_frame - start_frame),
-                "speechDurationSec": speech_samples / PCM_SAMPLE_RATE,
-                "totalDurationSec": (speech_samples + pause_samples) / PCM_SAMPLE_RATE,
-            }
-        )
-
-    total_frames = max(1, boundaries[-1] if boundaries else 1)
-    return {
-        "fps": fps,
-        "sampleRate": PCM_SAMPLE_RATE,
-        "totalSamples": cumulative_samples,
-        "totalFrames": total_frames,
-        "totalDurationSec": cumulative_samples / PCM_SAMPLE_RATE,
-        "boundaries": boundaries,
-        "scenes": scenes,
-    }
+def frames_to_srt_timestamp(frame: int) -> str:
+    total_ms = max(0, frames_to_ms(max(0, int(round(frame)))))
+    hours = total_ms // 3_600_000
+    minutes = (total_ms % 3_600_000) // 60_000
+    seconds = (total_ms % 60_000) // 1000
+    millis = total_ms % 1000
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"

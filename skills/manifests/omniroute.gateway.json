@@ -1,0 +1,20 @@
+{
+  "schema_version": "kr.skill.manifest.v1",
+  "skill_id": "omniroute.gateway",
+  "name": "OmniRoute Gateway",
+  "kind": "infrastructure",
+  "source_repo": "https://github.com/diegosouzapw/OmniRoute",
+  "source_commit": "5ffa68e835442a12ed1204a2eebf4076c298aecb",
+  "spdx_license": "MIT",
+  "licence_state": "approved",
+  "runtime": "infrastructure",
+  "profiles": [],
+  "adapter": "kr_first_party_director_router_v1",
+  "tools": [],
+  "instruction_files": [],
+  "entrypoint_files": [],
+  "prerequisites": [
+    "long_lived_node_gateway_not_vercel_serverless"
+  ],
+  "notes": "Inspected release/v3.8.55: monolithic Next.js/SQLite server unsuitable for Vercel 250 MB bounded serverless functions. First-party KathaRiftDirectorRouter adapter used instead with strict zero-spend & no-fallback policy."
+}

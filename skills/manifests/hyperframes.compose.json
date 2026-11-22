@@ -1,0 +1,35 @@
+{
+  "schema_version": "kr.skill.manifest.v1",
+  "skill_id": "hyperframes.compose",
+  "name": "HyperFrames Compositor & Motion Doctrine",
+  "kind": "renderer",
+  "source_repo": "https://github.com/heygen-com/hyperframes",
+  "source_commit": "086948766477b8ae4c4fa1be0b4215a627e1062b",
+  "spdx_license": "Apache-2.0",
+  "licence_state": "approved",
+  "runtime": "worker.render",
+  "profiles": [
+    "app",
+    "worker"
+  ],
+  "adapter": "kr_hyperframes_v1",
+  "tools": [
+    "compose_scene",
+    "hyperframes_align_captions"
+  ],
+  "instruction_files": [
+    "skills/vendor/hyperframes/.agents/skills/motion-doctrine/SKILL.md",
+    "skills/vendor/hyperframes/.agents/skills/motion-doctrine/references/seam-gate.md",
+    "skills/vendor/hyperframes/.agents/skills/captions-overlay/SKILL.md"
+  ],
+  "entrypoint_files": [
+    "skills/vendor/hyperframes/LICENSE",
+    "skills/vendor/hyperframes/.agents/skills/motion-doctrine/scripts/seam-gate.mjs",
+    "skills/vendor/hyperframes/.agents/skills/changelog-video/scripts/align-captions.mjs"
+  ],
+  "prerequisites": [
+    "node>=22",
+    "active_permitted_worker"
+  ],
+  "notes": "Apache-2.0 instructions + Node 22 scripts provisioned in app/worker; full MP4 compose execution requires Colab/worker Node22 + FFmpeg runtime."
+}
