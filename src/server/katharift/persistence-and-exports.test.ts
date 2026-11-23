@@ -13,7 +13,17 @@ import {
 test(
   "[Fixture DB] story edits, timeline saves, SRT/JSON export timing, and MP4 queue deduplication persist across reload",
   async () => {
-    const prevFixture = process.env.KR_LOCAL_FIXTURE_DB;
+    const prevEnv = {
+      KR_LOCAL_FIXTURE_DB: process.env.KR_LOCAL_FIXTURE_DB,
+      VERCEL: process.env.VERCEL,
+      VERCEL_ENV: process.env.VERCEL_ENV,
+      NODE_ENV: process.env.NODE_ENV,
+      CI: process.env.CI,
+    };
+    delete process.env.VERCEL;
+    delete process.env.VERCEL_ENV;
+    delete process.env.NODE_ENV;
+    delete process.env.CI;
     process.env.KR_LOCAL_FIXTURE_DB = "true";
 
     try {
@@ -150,8 +160,10 @@ test(
       );
       assert.equal(activeMp4Hi.length, 1);
     } finally {
-      if (prevFixture === undefined) delete process.env.KR_LOCAL_FIXTURE_DB;
-      else process.env.KR_LOCAL_FIXTURE_DB = prevFixture;
+      for (const [k, v] of Object.entries(prevEnv)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
     }
   },
 );
