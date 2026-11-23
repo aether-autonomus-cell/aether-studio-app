@@ -45,6 +45,7 @@ test("Story patch respects locked canon, applies cleanly, and rebases non-confli
     revision: rev1,
     instruction: "Make the scene feel drenched in rain",
   });
+  assert.ok(patch);
   assert.ok(patch.operations.length >= 1);
   // Scene 1 is locked_canon=true, so patch targets sc_02
   assert.equal(patch.operations[0].target_id, "sc_02");
@@ -98,6 +99,7 @@ test("Roman-Hindi scene 2 light-rain request preserves ending, characters, and l
       "Sirf editable scene 2 mein halki baarish ka atmosphere add karo. Characters, locked scene aur ending ko unchanged rakho.",
   });
 
+  assert.ok(patch);
   assert.ok(patch.operations.every((op) => op.op === "update_scene"));
   assert.ok(patch.operations.every((op) => op.target_id === "sc_02"));
   assert.ok(!patch.operations.some((op) => op.op === "insert_scene"));
@@ -164,6 +166,116 @@ test("Story patch fails closed on locked-scene targeting, missing scenes, charac
     revision: rev1,
     instruction: "Add dawn ending scene",
   });
+  assert.ok(added.patch);
   assert.equal(added.patch.operations[0].op, "insert_scene");
   assert.equal(added.patch.operations[0].target_id, "sc_04");
+});
+
+test("Repeated story edit proposals, rebases, and patch applications are semantically idempotent (no duplicate rain text or mood)", () => {
+  const bible = buildDefaultStoryBible("proj_idempotent");
+  const rev1: KrStoryRevision = {
+    revision_id: "srev_idem_1",
+    project_id: "proj_idempotent",
+    version: 1,
+    parent_revision_id: null,
+    summary: "Initial",
+    content_sha256: sha256Json(bible),
+    bible,
+    created_at: "2026-11-23T00:00:00Z",
+  };
+
+  const first = proposeStoryPatch({
+    revision: rev1,
+    instruction: "Add light monsoon rain to Scene 2",
+  });
+  assert.equal(first.noOp, false);
+  assert.ok(first.patch);
+
+  // Applying the same patch twice never duplicates text or mood
+  const once = applyStoryPatchToBible(bible, first.patch);
+  const twice = applyStoryPatchToBible(once, first.patch);
+  assert.equal(twice.scenes[1].visual_prompt, once.scenes[1].visual_prompt);
+  assert.equal(twice.scenes[1].mood, once.scenes[1].mood);
+  assert.equal(
+    (once.scenes[1].mood.match(/light monsoon drizzle/gi) ?? []).length,
+    1,
+  );
+
+  // Proposing light rain again against v2 is a clean no-op
+  const rev2: KrStoryRevision = {
+    revision_id: "srev_idem_2",
+    project_id: "proj_idempotent",
+    version: 2,
+    parent_revision_id: "srev_idem_1",
+    summary: "Applied light rain",
+    content_sha256: sha256Json(once),
+    bible: once,
+    created_at: "2026-11-23T00:05:00Z",
+  };
+
+  const repeatProposal = proposeStoryPatch({
+    revision: rev2,
+    instruction: "Sirf scene 2 mein halki baarish add karo",
+  });
+  assert.equal(repeatProposal.noOp, true);
+  assert.equal(repeatProposal.patch, null);
+  assert.match(repeatProposal.assistantMessage, /No-op|already applied/i);
+
+  // Rebasing an older duplicate v1 light-rain patch against v2 also collapses to an already-applied no-op
+  const duplicateFromV1 = proposeStoryPatch({
+    revision: rev1,
+    instruction: "Add gentle drizzle to Scene 2",
+  });
+  assert.ok(duplicateFromV1.patch);
+  const rebased = rebaseStoryPatch(rev2, duplicateFromV1.patch);
+  assert.equal(rebased.ok, true);
+  if (rebased.ok) {
+    assert.equal(rebased.alreadyApplied, true);
+    assert.equal(rebased.rebasedPatch.operations.length, 0);
+  }
+});
+
+test("Locked-scene error guidance dynamically lists only actually editable scenes", () => {
+  const bible = buildDefaultStoryBible("proj_locked_guidance");
+  // Lock Scene 2 as well so ONLY Scene 3 is editable
+  bible.scenes[1].locked_canon = true;
+  const rev: KrStoryRevision = {
+    revision_id: "srev_locked_1",
+    project_id: "proj_locked_guidance",
+    version: 1,
+    parent_revision_id: null,
+    summary: "Scene 1 & 2 locked",
+    content_sha256: sha256Json(bible),
+    bible,
+    created_at: "2026-11-23T00:00:00Z",
+  };
+
+  assert.throws(
+    () =>
+      proposeStoryPatch({
+        revision: rev,
+        instruction: "Add light rain to Scene 2",
+      }),
+    (err: unknown) => {
+      assert.ok(err instanceof StoryPatchRequestError);
+      assert.match(err.message, /Scene 3/);
+      assert.doesNotMatch(err.message, /e\.g\. Scene 2/);
+      return true;
+    },
+  );
+
+  // Lock Scene 3 too -> guidance states all scenes are locked
+  bible.scenes[2].locked_canon = true;
+  assert.throws(
+    () =>
+      proposeStoryPatch({
+        revision: rev,
+        instruction: "Add light rain to Scene 2",
+      }),
+    (err: unknown) => {
+      assert.ok(err instanceof StoryPatchRequestError);
+      assert.match(err.message, /All scenes.*locked/i);
+      return true;
+    },
+  );
 });

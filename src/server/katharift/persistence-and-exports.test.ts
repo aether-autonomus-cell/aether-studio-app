@@ -3,12 +3,17 @@ import assert from "node:assert/strict";
 import { trimClipOutEdge, updateAudioStem } from "../../packages/editor/engine.ts";
 import { StoryRevisionConflictError } from "./route-errors.ts";
 import {
+  claimJobForWorker,
   createOrRenderExport,
   createStoryPatchProposal,
+  createWorkerPairingSession,
   getOrCreateActiveWorkspace,
+  loadWorkspaceState,
   resolveStoryPatch,
+  revokeWorkerPairingSession,
   saveTimelineEditRevision,
 } from "./repository.ts";
+import { getSql } from "../../lib/db.ts";
 
 test(
   "[Fixture DB] story edits, timeline saves, SRT/JSON export timing, and MP4 queue deduplication persist across reload",
@@ -45,6 +50,8 @@ test(
         "Sirf editable scene 2 mein halki baarish ka atmosphere add karo. Characters, locked scene aur ending ko unchanged rakho.",
         initialRevId,
       );
+      assert.equal(proposal.noOp, false);
+      assert.ok(proposal.patch);
       assert.ok(proposal.patch.operations.every((op) => op.target_id === "sc_02"));
       assert.ok(!proposal.patch.operations.some((op) => op.op === "insert_scene"));
 
@@ -55,6 +62,17 @@ test(
         action: "accept",
       });
       assert.equal(resolved.status, "accepted");
+
+      // Repeated semantically equivalent proposal on Story v2 returns noOp without duplicating text
+      const afterV2 = await getOrCreateActiveWorkspace(userId);
+      const repeated = await createStoryPatchProposal(
+        userId,
+        projectId,
+        "Sirf editable scene 2 mein halki baarish ka atmosphere add karo.",
+        afterV2.storyRevision.revision_id,
+      );
+      assert.equal(repeated.noOp, true);
+      assert.equal(repeated.patch, null);
 
       // Stale expected_story_revision_id is rejected cleanly with StoryRevisionConflictError
       await assert.rejects(
@@ -159,6 +177,73 @@ test(
           e.status === "queued",
       );
       assert.equal(activeMp4Hi.length, 1);
+
+      // 8. Worker pairing lifecycle honesty: unredeemed code is awaiting_worker (NOT connected/paired),
+      //    worker auth transitions to authenticated_paired, targeted revoke affects only that code,
+      //    and unredeemed codes older than 15m expire automatically.
+      const exposedPair = await createWorkerPairingSession(userId, projectId, "colab_free_gpu");
+      assert.equal(exposedPair.lifecycle_state, "awaiting_worker");
+
+      const beforeWorkerState = await loadWorkspaceState(userId, projectId);
+      const exposedWs = beforeWorkerState.workerSessions.find(
+        (w) => w.worker_session_id === exposedPair.worker_session_id,
+      );
+      assert.ok(exposedWs);
+      assert.equal(exposedWs.lifecycle_state, "awaiting_worker");
+      assert.equal(exposedWs.is_connected, false);
+      assert.equal(exposedWs.pairing_code_issued_only, true);
+      assert.doesNotMatch(exposedWs.label, /^paired$/i);
+
+      // Revoke only the exposed pairing code while keeping a second session intact
+      const validPair = await createWorkerPairingSession(userId, projectId, "colab_free_gpu");
+      const revoked = await revokeWorkerPairingSession(
+        userId,
+        projectId,
+        exposedPair.worker_session_id,
+      );
+      assert.equal(revoked.status, "revoked");
+
+      await assert.rejects(
+        () => claimJobForWorker({ pairingCode: exposedPair.pairing_code, gpuName: "T4" }),
+        /Invalid or revoked/i,
+      );
+
+      // Valid second code connects cleanly -> authenticated_paired (no jobs queued)
+      const claimedEmpty = await claimJobForWorker({
+        pairingCode: validPair.pairing_code,
+        gpuName: "Tesla T4",
+      });
+      assert.equal(claimedEmpty.lifecycle_state, "authenticated_paired");
+
+      const afterConnectState = await loadWorkspaceState(userId, projectId);
+      const connectedWs = afterConnectState.workerSessions.find(
+        (w) => w.worker_session_id === validPair.worker_session_id,
+      );
+      const revokedWs = afterConnectState.workerSessions.find(
+        (w) => w.worker_session_id === exposedPair.worker_session_id,
+      );
+      assert.equal(connectedWs?.lifecycle_state, "authenticated_paired");
+      assert.equal(connectedWs?.is_connected, true);
+      assert.equal(revokedWs?.lifecycle_state, "revoked");
+      assert.equal(revokedWs?.is_connected, false);
+      // Story revisions remain intact
+      assert.equal(afterConnectState.storyRevision.version, 2);
+
+      // Unredeemed pairing session older than 15 minutes auto-expires
+      const stalePair = await createWorkerPairingSession(userId, projectId, "colab_free_gpu");
+      const sql = await getSql();
+      const twentyMinsAgo = new Date(Date.now() - 20 * 60_000).toISOString();
+      await sql`
+        UPDATE kr_worker_sessions
+        SET created_at = ${twentyMinsAgo}::timestamptz
+        WHERE worker_session_id = ${stalePair.worker_session_id}
+      `;
+      const afterExpiryState = await loadWorkspaceState(userId, projectId);
+      const expiredWs = afterExpiryState.workerSessions.find(
+        (w) => w.worker_session_id === stalePair.worker_session_id,
+      );
+      assert.equal(expiredWs?.lifecycle_state, "expired");
+      assert.equal(expiredWs?.is_connected, false);
     } finally {
       for (const [k, v] of Object.entries(prevEnv)) {
         if (v === undefined) delete process.env[k];

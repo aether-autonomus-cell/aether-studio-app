@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, CheckCircle2, Clock, Copy, Cpu, KeyRound, PauseCircle, RefreshCw } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Copy, Cpu, KeyRound, PauseCircle, RefreshCw, ShieldOff } from "lucide-react";
 import { KR_SCENE_STAGES, type KrSceneStage } from "@/packages/contracts/schemas";
 import { krApiFetch, type WorkspaceSnapshot } from "./types";
 
@@ -16,12 +16,22 @@ export function ProductionTab({ workspace, onRefresh }: ProductionTabProps) {
   const [pairingInfo, setPairingInfo] = useState<{
     worker_session_id: string;
     pairing_code: string;
+    expires_at?: string;
   } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const latestJob = workspace.jobs[0] ?? null;
+
+  const activePairingSession = pairingInfo
+    ? workspace.workerSessions.find((w) => w.worker_session_id === pairingInfo.worker_session_id)
+    : null;
+  const showActivePairingBanner =
+    pairingInfo !== null &&
+    activePairingSession?.lifecycle_state !== "revoked" &&
+    activePairingSession?.lifecycle_state !== "expired";
 
   async function handleGeneratePairingCode() {
     setBusy(true);
@@ -30,6 +40,7 @@ export function ProductionTab({ workspace, onRefresh }: ProductionTabProps) {
       const res = await krApiFetch<{
         worker_session_id: string;
         pairing_code: string;
+        expires_at?: string;
       }>("/api/kr/jobs/pair", {
         method: "POST",
         body: JSON.stringify({
@@ -46,7 +57,30 @@ export function ProductionTab({ workspace, onRefresh }: ProductionTabProps) {
     }
   }
 
-  const colabCommand = pairingInfo
+  async function handleRevokeSession(workerSessionId: string) {
+    setRevokingId(workerSessionId);
+    setErrorMsg(null);
+    try {
+      await krApiFetch<{ worker_session_id: string; status: string }>("/api/kr/jobs/pair", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "revoke",
+          project_id: workspace.project.project_id,
+          worker_session_id: workerSessionId,
+        }),
+      });
+      if (pairingInfo?.worker_session_id === workerSessionId) {
+        setPairingInfo(null);
+      }
+      await onRefresh();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Failed to revoke pairing session");
+    } finally {
+      setRevokingId(null);
+    }
+  }
+
+  const colabCommand = showActivePairingBanner && pairingInfo
     ? `python3 worker/colab_worker.py --app-url "${typeof window !== "undefined" ? window.location.origin : ""}" --pairing-code "${pairingInfo.pairing_code}" --mode colab`
     : "";
 
@@ -92,10 +126,12 @@ export function ProductionTab({ workspace, onRefresh }: ProductionTabProps) {
           </div>
         </div>
 
-        {pairingInfo && (
-          <div className="mt-3 rounded-xl border border-violet-500/30 bg-black/40 p-3">
-            <div className="flex items-center justify-between gap-2 text-xs">
-              <span className="text-[var(--kr-muted)]">Short-lived Pairing Code:</span>
+        {showActivePairingBanner && pairingInfo && (
+          <div className="mt-3 rounded-xl border border-amber-500/30 bg-black/40 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="text-amber-200">
+                Pairing code issued · awaiting Colab/worker authentication (expires in 15 min)
+              </span>
               <span className="font-mono text-sm font-bold text-violet-300">
                 {pairingInfo.pairing_code}
               </span>
@@ -120,25 +156,47 @@ export function ProductionTab({ workspace, onRefresh }: ProductionTabProps) {
           <p className="mt-2 text-xs text-rose-300">{errorMsg}</p>
         )}
 
-        {/* Active / Recent Worker Sessions */}
+        {/* Active / Recent Worker Sessions (server-verified lifecycle states) */}
         <div className="mt-3 flex flex-wrap gap-2 text-xs">
           {workspace.workerSessions.length === 0 ? (
             <span className="rounded-lg bg-white/5 px-2.5 py-1 text-[var(--kr-muted)]">
-              No worker paired yet (waiting for user-started Colab session)
+              No worker connected yet (waiting for user-started Colab session)
             </span>
           ) : (
-            workspace.workerSessions.slice(0, 2).map((ws) => (
-              <span
-                key={ws.worker_session_id}
-                className={`rounded-lg px-2.5 py-1 ${
-                  ws.status === "active"
-                    ? "bg-emerald-500/15 text-emerald-300"
-                    : "bg-white/5 text-[var(--kr-muted)]"
-                }`}
-              >
-                {ws.gpu_name ?? ws.runtime_kind} · {ws.status}
-              </span>
-            ))
+            workspace.workerSessions.slice(0, 3).map((ws) => {
+              const badgeStyle =
+                ws.lifecycle_state === "active_heartbeat" ||
+                ws.lifecycle_state === "authenticated_paired"
+                  ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                  : ws.lifecycle_state === "awaiting_worker" ||
+                      ws.lifecycle_state === "heartbeat_stale"
+                    ? "bg-amber-500/15 text-amber-200 border border-amber-500/30"
+                    : "bg-white/5 text-[var(--kr-muted)] border border-white/10";
+              const canRevoke =
+                ws.lifecycle_state !== "revoked" && ws.lifecycle_state !== "expired";
+              return (
+                <div
+                  key={ws.worker_session_id}
+                  className={`inline-flex items-center gap-2 rounded-lg px-2.5 py-1 ${badgeStyle}`}
+                >
+                  <span>
+                    {ws.gpu_name ?? ws.runtime_kind} · {ws.label}
+                  </span>
+                  {canRevoke && (
+                    <button
+                      type="button"
+                      disabled={revokingId === ws.worker_session_id}
+                      onClick={() => handleRevokeSession(ws.worker_session_id)}
+                      className="inline-flex items-center gap-1 rounded bg-black/30 px-1.5 py-0.5 text-[10px] font-medium text-rose-200 hover:bg-rose-500/20 disabled:opacity-50"
+                      title="Revoke this pairing code/session"
+                    >
+                      <ShieldOff className="h-3 w-3" />
+                      {revokingId === ws.worker_session_id ? "Revoking…" : "Revoke"}
+                    </button>
+                  )}
+                </div>
+              );
+            })
           )}
         </div>
       </section>

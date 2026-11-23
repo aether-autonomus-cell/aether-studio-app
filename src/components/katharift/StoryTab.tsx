@@ -45,7 +45,8 @@ export function StoryTab({
     setErrorMsg(null);
     try {
       const res = await krApiFetch<{
-        patch: KrStoryPatch;
+        patch: KrStoryPatch | null;
+        noOp?: boolean;
         assistantMessage: string;
         instructionsLoaded: Array<{ skill_id: string; file_path: string }>;
       }>("/api/kr/story/propose", {
@@ -57,9 +58,13 @@ export function StoryTab({
         }),
       });
       setAssistantNote(
-        `${res.assistantMessage} (${res.instructionsLoaded.length} licensed skill guide(s) consulted.)`,
+        res.noOp || !res.patch
+          ? res.assistantMessage
+          : `${res.assistantMessage} (${res.instructionsLoaded.length} licensed skill guide(s) consulted.)`,
       );
-      onDraftInstructionChange("");
+      if (!res.noOp) {
+        onDraftInstructionChange("");
+      }
       await onRefresh();
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Failed to propose patch");

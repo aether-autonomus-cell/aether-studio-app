@@ -9,6 +9,7 @@ import type {
   KrWorkerEvent,
 } from "@/packages/contracts/schemas";
 import type { SkillRegistryReport } from "@/packages/skill-runtime/registry";
+import type { WorkerSessionLifecycleState } from "@/packages/contracts/worker-session";
 
 export type PrimaryTab = "story" | "production" | "editor" | "exports";
 export type StudioDrawer = "none" | "settings" | "canon" | "assets" | "connections" | "activity";
@@ -42,6 +43,11 @@ export interface WorkspaceSnapshot {
     gpu_name: string | null;
     last_heartbeat_at: string | null;
     created_at: string;
+    lifecycle_state: WorkerSessionLifecycleState;
+    is_connected: boolean;
+    pairing_code_issued_only: boolean;
+    expires_at: string | null;
+    label: string;
   }>;
   workerEvents: KrWorkerEvent[];
   exports: Array<{
