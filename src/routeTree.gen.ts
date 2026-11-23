@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiKrAuthStatusRouteImport } from './routes/api/kr/auth-status'
 import { Route as ApiKrConnectionsRouteImport } from './routes/api/kr/connections'
 import { Route as ApiKrExportsRouteImport } from './routes/api/kr/exports'
 import { Route as ApiKrSettingsRouteImport } from './routes/api/kr/settings'
@@ -32,6 +33,11 @@ const IndexRoute = IndexRouteImport.update({
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiKrAuthStatusRoute = ApiKrAuthStatusRouteImport.update({
+  id: '/api/kr/auth-status',
+  path: '/api/kr/auth-status',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiKrConnectionsRoute = ApiKrConnectionsRouteImport.update({
@@ -98,6 +104,7 @@ const ApiKrWorkerClaimRoute = ApiKrWorkerClaimRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/kr/auth-status': typeof ApiKrAuthStatusRoute
   '/api/kr/connections': typeof ApiKrConnectionsRoute
   '/api/kr/exports': typeof ApiKrExportsRoute
   '/api/kr/settings': typeof ApiKrSettingsRoute
@@ -114,6 +121,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/kr/auth-status': typeof ApiKrAuthStatusRoute
   '/api/kr/connections': typeof ApiKrConnectionsRoute
   '/api/kr/exports': typeof ApiKrExportsRoute
   '/api/kr/settings': typeof ApiKrSettingsRoute
@@ -131,6 +139,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/kr/auth-status': typeof ApiKrAuthStatusRoute
   '/api/kr/connections': typeof ApiKrConnectionsRoute
   '/api/kr/exports': typeof ApiKrExportsRoute
   '/api/kr/settings': typeof ApiKrSettingsRoute
@@ -149,6 +158,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/api/auth/$'
+    | '/api/kr/auth-status'
     | '/api/kr/connections'
     | '/api/kr/exports'
     | '/api/kr/settings'
@@ -165,6 +175,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/api/auth/$'
+    | '/api/kr/auth-status'
     | '/api/kr/connections'
     | '/api/kr/exports'
     | '/api/kr/settings'
@@ -181,6 +192,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/api/auth/$'
+    | '/api/kr/auth-status'
     | '/api/kr/connections'
     | '/api/kr/exports'
     | '/api/kr/settings'
@@ -198,6 +210,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiKrAuthStatusRoute: typeof ApiKrAuthStatusRoute
   ApiKrConnectionsRoute: typeof ApiKrConnectionsRoute
   ApiKrExportsRoute: typeof ApiKrExportsRoute
   ApiKrSettingsRoute: typeof ApiKrSettingsRoute
@@ -226,6 +239,13 @@ declare module '@tanstack/react-router' {
       path: '/api/auth/$'
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/kr/auth-status': {
+      id: '/api/kr/auth-status'
+      path: '/api/kr/auth-status'
+      fullPath: '/api/kr/auth-status'
+      preLoaderRoute: typeof ApiKrAuthStatusRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/kr/connections': {
@@ -318,6 +338,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiKrAuthStatusRoute: ApiKrAuthStatusRoute,
   ApiKrConnectionsRoute: ApiKrConnectionsRoute,
   ApiKrExportsRoute: ApiKrExportsRoute,
   ApiKrSettingsRoute: ApiKrSettingsRoute,

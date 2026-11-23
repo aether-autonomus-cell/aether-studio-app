@@ -5,7 +5,7 @@
  * IMPORTANT: Never invoked from `npm run build` so PR Preview builds cannot
  * mutate a shared or production database. Run explicitly as an operator step:
  *   DATABASE_URL=... npm run db:migrate:status
- *   DATABASE_URL=... npm run db:migrate
+ *   DATABASE_URL=... npm run db:migrate -- --include-auth
  *   DATABASE_URL=... npm run db:rollback -- 0002_katharift.sql
  */
 import { readdir, readFile } from "node:fs/promises";
@@ -16,7 +16,8 @@ import { pendingMigrations } from "./migration-plan.mjs";
 import { isMainModule } from "./with-app-env.mjs";
 
 export function parseMigrateArgs(argv) {
-  if (argv.includes("--status")) return { mode: "status", target: null };
+  const includeAuth = argv.includes("--include-auth");
+  if (argv.includes("--status")) return { mode: "status", target: null, includeAuth };
   const downIdx = argv.indexOf("--down");
   if (downIdx !== -1) {
     const target = argv[downIdx + 1]?.trim();
@@ -24,11 +25,12 @@ export function parseMigrateArgs(argv) {
       return {
         mode: "error",
         error: "usage: node scripts/migrate.mjs --down <migration.sql>",
+        includeAuth: false,
       };
     }
-    return { mode: "down", target };
+    return { mode: "down", target, includeAuth };
   }
-  return { mode: "apply", target: null };
+  return { mode: "apply", target: null, includeAuth };
 }
 
 export function checkMigrationPreconditions({ env = process.env, mode = "apply" } = {}) {
@@ -62,6 +64,21 @@ export function downMigrationFileName(upFileName) {
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
+async function collectMigrationFiles(includeAuth) {
+  const entries = (await readdir(migrationsDir)).map((name) => join(migrationsDir, name));
+  if (includeAuth) {
+    try {
+      const authEntries = await readdir(join(migrationsDir, "auth"));
+      for (const name of authEntries) {
+        entries.push(join(migrationsDir, "auth", name));
+      }
+    } catch {
+      // auth/ directory absent
+    }
+  }
+  return entries;
+}
+
 async function main(argv) {
   const parsed = parseMigrateArgs(argv);
   if (parsed.mode === "error") {
@@ -77,7 +94,7 @@ async function main(argv) {
 
   let entries;
   try {
-    entries = await readdir(migrationsDir);
+    entries = await collectMigrationFiles(parsed.includeAuth);
   } catch {
     console.log("[migrate] no migrations/ directory — nothing to do.");
     return;
@@ -136,8 +153,8 @@ async function main(argv) {
     }
 
     let count = 0;
-    for (const { name } of pending) {
-      const text = await readFile(join(migrationsDir, name), "utf8");
+    for (const { name, path } of pending) {
+      const text = await readFile(path, "utf8");
       try {
         await client.query("BEGIN");
         await client.query(text);

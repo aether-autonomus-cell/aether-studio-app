@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Navigate } from "@tanstack/react-router";
 import { GROK_PROVIDERS, authEnabled, signIn, signOut } from "./client";
 import { hasGateSessionMarker } from "./gate-session-marker";
@@ -63,17 +63,109 @@ export function SignInGate({
   return <>{fallback ?? <SignInButtons />}</>;
 }
 
+type SignInProviderOption = {
+  providerId: string;
+  label: string;
+  flow: "social" | "oauth2";
+};
+
+type AuthStatusPayload = {
+  ready: boolean;
+  code: string | null;
+  message: string;
+  providers: SignInProviderOption[];
+};
+
+function readUrlAuthError(): string | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get("auth_error") ?? params.get("error");
+  if (!code) return null;
+  if (code === "OWNER_FORBIDDEN" || code === "access_denied" || code === "unable_to_create_user") {
+    return "Access is restricted to the verified studio owner Google account.";
+  }
+  return `Sign-in blocked (${code}).`;
+}
+
 export function SignInButtons() {
+  const [status, setStatus] = useState<AuthStatusPayload | null>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [busyProvider, setBusyProvider] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(() => readUrlAuthError());
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/kr/auth-status", { credentials: "same-origin" })
+      .then(async (res) => {
+        if (!res.ok) return null;
+        return (await res.json()) as AuthStatusPayload;
+      })
+      .then((payload) => {
+        if (active && payload) setStatus(payload);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (active) setStatusLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const providers: SignInProviderOption[] =
+    status?.providers ??
+    GROK_PROVIDERS.map((p) => ({
+      providerId: p.providerId,
+      label: p.label,
+      flow: "oauth2" as const,
+    }));
+
+  if (statusLoading) {
+    return (
+      <div className="w-full max-w-sm rounded-md border border-white/10 px-4 py-2 text-xs text-[var(--kr-muted)]">
+        Checking authentication status…
+      </div>
+    );
+  }
+
+  if (status && !status.ready) {
+    return (
+      <div className="w-full max-w-sm rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-left text-xs text-amber-200">
+        <p className="font-semibold text-amber-100">
+          {status.code ?? "AUTH_NOT_CONFIGURED"}
+        </p>
+        <p className="mt-1 text-amber-200/90">{status.message}</p>
+      </div>
+    );
+  }
+
   return (
     <div className="flex w-full max-w-sm flex-col gap-2">
-      {GROK_PROVIDERS.map((p) => (
+      {actionError && (
+        <div className="rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+          {actionError}
+        </div>
+      )}
+      {providers.map((p) => (
         <button
           key={p.providerId}
           type="button"
-          onClick={() => signIn(p.providerId, { callbackURL: "/" })}
-          className="w-full cursor-pointer rounded-md border border-neutral-300 px-4 py-2 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-900"
+          disabled={busyProvider !== null}
+          onClick={() => {
+            setActionError(null);
+            setBusyProvider(p.providerId);
+            void signIn(p.providerId, {
+              flow: p.flow,
+              callbackURL: "/",
+              errorCallbackURL: "/?auth_error=access_denied",
+            }).catch((err) => {
+              setBusyProvider(null);
+              setActionError(err instanceof Error ? err.message : "Sign-in failed");
+            });
+          }}
+          className="w-full cursor-pointer rounded-md border border-neutral-300 px-4 py-2 font-medium hover:bg-neutral-100 disabled:cursor-wait disabled:opacity-60 dark:border-neutral-700 dark:hover:bg-neutral-900"
         >
-          Continue with {p.label}
+          {busyProvider === p.providerId ? `Redirecting to ${p.label}…` : `Continue with ${p.label}`}
         </button>
       ))}
     </div>

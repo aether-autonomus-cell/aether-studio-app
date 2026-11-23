@@ -12,7 +12,7 @@ import {
   Sparkles,
   WifiOff,
 } from "lucide-react";
-import { SignInGate, UserButton } from "@/lib/auth/gates";
+import { SignInButtons, SignInGate, UserButton } from "@/lib/auth/gates";
 import { StudioDrawers } from "./Drawers";
 import { EditorTab } from "./EditorTab";
 import { ExportsTab } from "./ExportsTab";
@@ -38,7 +38,7 @@ export function KathaRiftStudioApp() {
               Sign in to access your bilingual story canon, Colab production jobs, and timelines.
             </p>
             <div className="mt-5 flex justify-center">
-              <SignInGate>{null}</SignInGate>
+              <SignInButtons />
             </div>
           </div>
         </div>

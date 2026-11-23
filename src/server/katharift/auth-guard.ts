@@ -1,5 +1,7 @@
 import {
+  assertVerifiedOwnerIdentity,
   AuthConfigurationError,
+  OwnerForbiddenError,
   resolveServerAuthPolicy,
   type ServerAuthPolicy,
 } from "./auth-policy.ts";
@@ -8,6 +10,12 @@ export type AuthGuardDeps = {
   env?: Record<string, string | undefined>;
   assertSameSite?: () => void;
   resolveUserId?: (bearerToken?: string) => Promise<string>;
+  resolveIdentity?: (bearerToken?: string) => Promise<{
+    id: string;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    linkedProviders?: readonly string[] | null;
+  }>;
 };
 
 export async function authenticateApiRequest(
@@ -53,7 +61,14 @@ export async function authenticateApiRequest(
 
   try {
     let userId: string;
-    if (opts?.deps?.resolveUserId) {
+    if (opts?.deps?.resolveIdentity) {
+      const identity = await opts.deps.resolveIdentity(bearer);
+      assertVerifiedOwnerIdentity(identity, env, {
+        requireAllowlist: policy.hasGoogleOAuth,
+        requireGoogleProvider: policy.hasGoogleOAuth && Boolean(identity.linkedProviders),
+      });
+      userId = identity.id;
+    } else if (opts?.deps?.resolveUserId) {
       userId = await opts.deps.resolveUserId(bearer);
     } else {
       const { requireUserId } = await import("@/lib/auth/verify.server");
@@ -67,6 +82,15 @@ export async function authenticateApiRequest(
         response: Response.json(
           { error: err.message, code: err.code },
           { status: 401 },
+        ),
+      };
+    }
+    if (err instanceof OwnerForbiddenError) {
+      return {
+        ok: false,
+        response: Response.json(
+          { error: err.message, code: err.code },
+          { status: 403 },
         ),
       };
     }

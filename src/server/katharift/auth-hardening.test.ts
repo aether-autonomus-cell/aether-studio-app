@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { DatabaseConfigurationError, resolveDbPolicy } from "../../lib/db-policy.ts";
 import { getSql } from "../../lib/db.ts";
 import { authenticateApiRequest } from "./auth-guard.ts";
-import { AuthConfigurationError, resolveServerAuthPolicy } from "./auth-policy.ts";
+import {
+  assertVerifiedOwnerIdentity,
+  AuthConfigurationError,
+  OwnerForbiddenError,
+  parseOwnerEmailAllowlist,
+  resolveServerAuthPolicy,
+} from "./auth-policy.ts";
 import {
   confirmAndEnqueueProductionJob,
   createOrRenderExport,
@@ -281,3 +289,260 @@ describe("Wrong-Owner Isolation & Worker Lease/Session Fencing", () => {
 
 // Keep AuthConfigurationError referenced for export contract
 assert.equal(typeof AuthConfigurationError, "function");
+
+describe("Google OAuth + Server-Side Owner Allowlist Enforcement", () => {
+  it("fails closed when GOOGLE_CLIENT_ID/SECRET are set without KR_OWNER_EMAIL", () => {
+    const missingAllowlist = resolveServerAuthPolicy({
+      VERCEL: "1",
+      VERCEL_ENV: "production",
+      BETTER_AUTH_SECRET: "0123456789abcdef0123456789abcdef",
+      GOOGLE_CLIENT_ID: "google_client_id",
+      GOOGLE_CLIENT_SECRET: "google_client_secret",
+    });
+    assert.equal(missingAllowlist.configured, false);
+
+    const ready = resolveServerAuthPolicy({
+      VERCEL: "1",
+      VERCEL_ENV: "production",
+      VITE_AUTH_ENABLED: "false",
+      BETTER_AUTH_SECRET: "0123456789abcdef0123456789abcdef",
+      GOOGLE_CLIENT_ID: "google_client_id",
+      GOOGLE_CLIENT_SECRET: "google_client_secret",
+      KR_OWNER_EMAIL: "Owner@Example.com",
+    });
+    assert.equal(ready.configured, true);
+    if (ready.configured) {
+      assert.equal(ready.hasGoogleOAuth, true);
+      assert.deepEqual(ready.ownerEmails, ["owner@example.com"]);
+    }
+    assert.deepEqual(
+      parseOwnerEmailAllowlist({ KR_OWNER_EMAIL: " Owner@Example.com , second@example.com " }),
+      ["owner@example.com", "second@example.com"],
+    );
+  });
+
+  it("rejects wrong-owner, unverified-email, and non-Google identities with 403 OWNER_FORBIDDEN", async () => {
+    const env = {
+      VERCEL: "1",
+      VERCEL_ENV: "production",
+      BETTER_AUTH_SECRET: "0123456789abcdef0123456789abcdef",
+      GOOGLE_CLIENT_ID: "google_client_id",
+      GOOGLE_CLIENT_SECRET: "google_client_secret",
+      KR_OWNER_EMAIL: "owner@example.com",
+    };
+
+    const nonOwnerRes = await authenticateApiRequest(
+      new Request("https://aether-studio-app.vercel.app/api/kr/workspace"),
+      {
+        deps: {
+          env,
+          resolveIdentity: async () => ({
+            id: "usr_attacker",
+            email: "attacker@example.com",
+            emailVerified: true,
+            linkedProviders: ["google"],
+          }),
+        },
+      },
+    );
+    assert.equal(nonOwnerRes.ok, false);
+    if (!nonOwnerRes.ok) {
+      assert.equal(nonOwnerRes.response.status, 403);
+      const body = (await nonOwnerRes.response.json()) as { code?: string };
+      assert.equal(body.code, "OWNER_FORBIDDEN");
+    }
+
+    const unverifiedRes = await authenticateApiRequest(
+      new Request("https://aether-studio-app.vercel.app/api/kr/workspace"),
+      {
+        deps: {
+          env,
+          resolveIdentity: async () => ({
+            id: "usr_owner",
+            email: "owner@example.com",
+            emailVerified: false,
+            linkedProviders: ["google"],
+          }),
+        },
+      },
+    );
+    assert.equal(unverifiedRes.ok, false);
+    if (!unverifiedRes.ok) {
+      assert.equal(unverifiedRes.response.status, 403);
+    }
+
+    const wrongProviderRes = await authenticateApiRequest(
+      new Request("https://aether-studio-app.vercel.app/api/kr/workspace"),
+      {
+        deps: {
+          env,
+          resolveIdentity: async () => ({
+            id: "usr_owner",
+            email: "owner@example.com",
+            emailVerified: true,
+            linkedProviders: ["credential"],
+          }),
+        },
+      },
+    );
+    assert.equal(wrongProviderRes.ok, false);
+    if (!wrongProviderRes.ok) {
+      assert.equal(wrongProviderRes.response.status, 403);
+    }
+
+    const okRes = await authenticateApiRequest(
+      new Request("https://aether-studio-app.vercel.app/api/kr/workspace"),
+      {
+        deps: {
+          env,
+          resolveIdentity: async () => ({
+            id: "usr_owner",
+            email: "Owner@Example.com",
+            emailVerified: true,
+            linkedProviders: ["google"],
+          }),
+        },
+      },
+    );
+    assert.equal(okRes.ok, true);
+    if (okRes.ok) {
+      assert.equal(okRes.userId, "usr_owner");
+    }
+  });
+
+  it("blocks non-owner and unverified accounts inside Better Auth databaseHooks against PGLite", async () => {
+    const { PGlite } = await import("@electric-sql/pglite");
+    const { betterAuth } = await import("better-auth");
+    const { APIError } = await import("better-auth/api");
+    const {
+      CompiledQuery,
+      PostgresAdapter,
+      PostgresIntrospector,
+      PostgresQueryCompiler,
+    } = await import("kysely");
+
+    const pg = new PGlite();
+    await pg.waitReady;
+    const bootstrapSql = readFileSync(
+      join(process.cwd(), "docs/sql/neon_bootstrap_v1_1.sql"),
+      "utf8",
+    );
+    await pg.exec(bootstrapSql);
+
+    const conn = {
+      async executeQuery<O>(cq: { sql: string; parameters: readonly unknown[] }) {
+        const res = await pg.query(cq.sql, [...cq.parameters]);
+        return res.affectedRows
+          ? { numAffectedRows: BigInt(res.affectedRows), rows: res.rows as O[] }
+          : { rows: res.rows as O[] };
+      },
+      async *streamQuery<O>(cq: { sql: string; parameters: readonly unknown[] }) {
+        const res = await pg.query(cq.sql, [...cq.parameters]);
+        yield { rows: res.rows as O[] };
+      },
+    };
+    const dialect = {
+      createAdapter: () => new PostgresAdapter(),
+      createDriver: () => ({
+        init: async () => undefined,
+        acquireConnection: async () => conn,
+        releaseConnection: async () => undefined,
+        beginTransaction: async () => {
+          await conn.executeQuery(CompiledQuery.raw("BEGIN"));
+        },
+        commitTransaction: async () => {
+          await conn.executeQuery(CompiledQuery.raw("COMMIT"));
+        },
+        rollbackTransaction: async () => {
+          await conn.executeQuery(CompiledQuery.raw("ROLLBACK"));
+        },
+        destroy: async () => undefined,
+      }),
+      createQueryCompiler: () => new PostgresQueryCompiler(),
+      createIntrospector: (db: import("kysely").Kysely<unknown>) =>
+        new PostgresIntrospector(db),
+    };
+
+    const testEnv = {
+      BETTER_AUTH_SECRET: "0123456789abcdef0123456789abcdef",
+      GOOGLE_CLIENT_ID: "google_client_id",
+      GOOGLE_CLIENT_SECRET: "google_client_secret",
+      KR_OWNER_EMAIL: "owner@example.com",
+    };
+
+    const testAuth = betterAuth({
+      baseURL: "https://aether-studio-app.vercel.app",
+      secret: testEnv.BETTER_AUTH_SECRET,
+      database: { dialect, type: "postgres" as const },
+      emailAndPassword: { enabled: true },
+      databaseHooks: {
+        user: {
+          create: {
+            before: async (user) => {
+              try {
+                assertVerifiedOwnerIdentity(
+                  {
+                    email: typeof user.email === "string" ? user.email : null,
+                    emailVerified: Boolean(user.emailVerified),
+                  },
+                  testEnv,
+                  { requireAllowlist: true },
+                );
+              } catch (err) {
+                throw APIError.from("FORBIDDEN", {
+                  code: "OWNER_FORBIDDEN",
+                  message: err instanceof Error ? err.message : "Forbidden",
+                });
+              }
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const attackerResp = await testAuth.handler(
+        new Request("https://aether-studio-app.vercel.app/api/auth/sign-up/email", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            email: "attacker@example.com",
+            password: "StrongPassword123!",
+            name: "Attacker",
+          }),
+        }),
+      );
+      assert.equal(attackerResp.status, 403);
+
+      // Even if the owner email signs up without emailVerified=true, hook rejects it
+      const unverifiedOwnerResp = await testAuth.handler(
+        new Request("https://aether-studio-app.vercel.app/api/auth/sign-up/email", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            email: "owner@example.com",
+            password: "StrongPassword123!",
+            name: "Owner",
+          }),
+        }),
+      );
+      assert.equal(unverifiedOwnerResp.status, 403);
+
+      const userCount = await pg.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM \"user\"");
+      assert.equal(Number(userCount.rows[0]?.count ?? 0), 0);
+
+      // Direct assertVerifiedOwnerIdentity check throws OwnerForbiddenError on wrong owner
+      assert.throws(
+        () =>
+          assertVerifiedOwnerIdentity(
+            { email: "stranger@example.com", emailVerified: true },
+            testEnv,
+            { requireAllowlist: true },
+          ),
+        OwnerForbiddenError,
+      );
+    } finally {
+      await pg.close();
+    }
+  });
+});
