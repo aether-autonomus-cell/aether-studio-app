@@ -168,12 +168,17 @@ export function dispatchSkillTool(
       trace: makeTrace("blocked_licence", { spdx_license: skillRecord.spdx_license }),
     };
   }
-  if (skillRecord.status !== "ready") {
+  if (skillRecord.status !== "ready" || !skillRecord.execution_ready) {
     return {
       ok: false,
       data: null,
-      error: `Skill ${spec.skill_id} is ${skillRecord.status} and cannot execute here`,
-      trace: makeTrace("unavailable", { status: skillRecord.status }),
+      error: skillRecord.execution_note || `Skill ${spec.skill_id} is ${skillRecord.status} and cannot execute here`,
+      trace: makeTrace("unavailable", {
+        status: skillRecord.status,
+        files_verified: skillRecord.files_verified,
+        execution_ready: skillRecord.execution_ready,
+        error: skillRecord.execution_note,
+      }),
     };
   }
 

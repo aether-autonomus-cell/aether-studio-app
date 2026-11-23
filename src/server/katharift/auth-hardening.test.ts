@@ -193,7 +193,7 @@ describe("Wrong-Owner Isolation & Worker Lease/Session Fencing", () => {
       assert.equal(wsA.runtime.label, "LOCAL_FIXTURE_EPHEMERAL_PGLITE");
 
       const projA = wsA.project.project_id;
-      const proposed = await createStoryPatchProposal(ownerA, projA, "Increase cliffhanger tension in scene 1");
+      const proposed = await createStoryPatchProposal(ownerA, projA, "Increase cliffhanger tension in scene 2");
 
       // Attacker B cannot read or mutate Owner A's project
       await assert.rejects(() => loadWorkspaceState(attackerB, projA), ProjectNotFoundError);

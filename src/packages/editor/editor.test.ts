@@ -10,11 +10,14 @@ import {
   createEditorHistory,
   dbToLinearGain,
   detectBilingualSilenceSuggestions,
+  exportTimelineEditBundle,
   exportTimelineSrt,
   frameFromTrackClientX,
+  getTimedSubtitleCue,
   redoEditorHistory,
   rippleDeleteRange,
   splitAtFrame,
+  splitIntoSubtitleCues,
   trimClipInEdge,
   trimClipOutEdge,
   undoEditorHistory,
@@ -263,4 +266,66 @@ test("[UI/EDL] long bilingual captions (>74 chars) are preserved without truncat
   assert.equal(tl.captions[0].en_text, longEn);
   assert.ok(exportTimelineSrt(tl, "hi").includes(longHi));
   assert.ok(exportTimelineSrt(tl, "en").includes(longEn));
+});
+
+test("[UI/EDL] timed subtitle cues chunk long narration into concise 1-2 line segments and advance with playhead", () => {
+  const longCap = {
+    caption_id: "cap_1",
+    scene_id: "sc_1",
+    in_frame: 0,
+    out_frame: 192,
+    hi_text:
+      "मीरा पीतल की लालटेन थामे पुरानी बावड़ी की सीढ़ियों पर रुकती है—नीचे ठहरे पानी में समय जैसे साँस रोके बैठा है।",
+    en_text:
+      "Holding her brass lantern steady, Meera pauses at the rim of the ancient stepwell—where still water below seems to hold its breath.",
+  };
+
+  const hiChunks = splitIntoSubtitleCues(longCap.hi_text, 62);
+  const enChunks = splitIntoSubtitleCues(longCap.en_text, 66);
+  assert.ok(hiChunks.length >= 2);
+  assert.ok(enChunks.length >= 2);
+  assert.ok(hiChunks.every((c) => c.length <= 66));
+  assert.ok(enChunks.every((c) => c.length <= 70));
+
+  const startCue = getTimedSubtitleCue(longCap, 4, "both");
+  const endCue = getTimedSubtitleCue(longCap, 180, "both");
+  assert.ok(startCue && endCue);
+  assert.notEqual(startCue.enLine, endCue.enLine);
+  assert.equal(getTimedSubtitleCue(longCap, 10, "hi")?.enLine, null);
+  assert.equal(getTimedSubtitleCue(longCap, 10, "en")?.hiLine, null);
+  assert.equal(getTimedSubtitleCue(longCap, 10, "off"), null);
+});
+
+test("[UI/EDL] SRT and JSON bundle exports reflect post-edit clip bounds and timestamps accurately", () => {
+  const tl = buildTimelineFromStory({
+    timeline_id: "tl_export_verify",
+    project_id: "proj_stepwell",
+    story_revision_id: "srev_1",
+    settings_revision_id: "set_1",
+    bible: sampleBible,
+  });
+
+  // Initial: 2 scenes x 4s = 192 frames (8.000s)
+  // Trim first clip out edge by -24 frames (-1.000s) => clip 1 [0, 72), clip 2 [72, 168), total 168 frames (7.000s)
+  const trimmed = trimClipOutEdge(tl, tl.clips[0].clip_id, -24);
+  const srtEn = exportTimelineSrt(trimmed, "en");
+  const srtHi = exportTimelineSrt(trimmed, "hi");
+  const bundle = exportTimelineEditBundle(trimmed) as {
+    timeline_version: number;
+    total_frames: number;
+    clips: Array<{ in_frame: number; out_frame: number }>;
+    srt_hi: string;
+    srt_en: string;
+  };
+
+  assert.ok(srtEn.includes("1\n00:00:00,000 --> 00:00:03,000\n"));
+  assert.ok(srtEn.includes("2\n00:00:03,000 --> 00:00:07,000\n"));
+  assert.ok(srtHi.includes("1\n00:00:00,000 --> 00:00:03,000\n"));
+  assert.ok(srtHi.includes("2\n00:00:03,000 --> 00:00:07,000\n"));
+  assert.equal(bundle.total_frames, 168);
+  assert.equal(bundle.clips[0].out_frame, 72);
+  assert.equal(bundle.clips[1].in_frame, 72);
+  assert.equal(bundle.clips[1].out_frame, 168);
+  assert.equal(bundle.srt_en, srtEn);
+  assert.equal(bundle.srt_hi, srtHi);
 });

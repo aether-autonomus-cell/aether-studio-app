@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Eye,
   Lock,
   Pause,
@@ -25,6 +27,7 @@ import {
   canAutoTrimSilenceSuggestion,
   commitEditorEdit,
   createEditorHistory,
+  getTimedSubtitleCue,
   redoEditorHistory,
   rippleDeleteRange,
   splitAtFrame,
@@ -33,7 +36,7 @@ import {
   undoEditorHistory,
   updateAudioStem,
   type EditorHistoryStack,
-} from "@/packages/editor/engine";
+} from "@/packages/editor/index";
 import {
   DEFAULT_TIMELINE_PX_PER_FRAME,
   clampZoomPxPerFrame,
@@ -81,6 +84,7 @@ export function EditorTab({ workspace, onRefresh }: EditorTabProps) {
   const [probeMap, setProbeMap] = useState<MediaProbeMap>({});
   const [audioPlaybackNotice, setAudioPlaybackNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [fullTextOpen, setFullTextOpen] = useState(false);
   const [lastActionLabel, setLastActionLabel] = useState("Timeline edit");
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [trimDragPreview, setTrimDragPreview] = useState<{
@@ -474,23 +478,20 @@ export function EditorTab({ workspace, onRefresh }: EditorTabProps) {
   const playheadLeftPx = TIMELINE_LEADING_PAD_PX + playheadFrame * pxPerFrame;
   const tickStepFrames = pxPerFrame >= 2 ? 24 : 48;
 
-  const captionMode = timeline.active_caption_lang;
-  const showHiCaption = Boolean(
-    activeCaption && (captionMode === "hi" || captionMode === "both"),
-  );
-  const showEnCaption = Boolean(
-    activeCaption && (captionMode === "en" || captionMode === "both"),
+  const timedCue = useMemo(
+    () => getTimedSubtitleCue(activeCaption, playheadFrame, timeline.active_caption_lang),
+    [activeCaption, playheadFrame, timeline.active_caption_lang],
   );
 
   const pictureState = activeClipMedia?.picture.state ?? "pending";
   const pictureBadgeText =
     pictureState === "validated"
-      ? "Media Verified"
+      ? "Verified"
       : pictureState === "available"
-        ? "Asset Available · Unverified"
+        ? "Unverified"
         : pictureState === "playback_error"
-          ? "Media Load Error · Storyboard Fallback"
-          : "Storyboard Only · Media Pending Worker";
+          ? "Fallback"
+          : "Storyboard Only";
 
   return (
     <div className="flex flex-col gap-3">
@@ -599,36 +600,36 @@ export function EditorTab({ workspace, onRefresh }: EditorTabProps) {
             />
           )}
 
-          {/* Top Preview Badges */}
-          <div className="pointer-events-none absolute inset-x-2.5 top-2.5 flex flex-wrap items-center justify-between gap-1.5">
+          {/* Compact Top Preview Badges */}
+          <div className="pointer-events-none absolute inset-x-2 top-2 flex items-center justify-between gap-1.5">
             <span
               data-testid="preview-media-badge"
-              className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold backdrop-blur-sm ${STATE_BADGE_CLASS[pictureState]}`}
+              className={`max-w-[62%] truncate rounded-full border px-2 py-0.5 text-[10px] font-semibold backdrop-blur-sm ${STATE_BADGE_CLASS[pictureState]}`}
             >
               {activeClip?.label ? `${activeClip.label} · ` : ""}
               {pictureBadgeText}
             </span>
 
-            <span className="rounded-full border border-white/15 bg-black/70 px-2.5 py-1 text-[10px] font-medium text-slate-200 backdrop-blur-sm">
+            <span className="shrink-0 rounded-full border border-white/15 bg-black/70 px-2 py-0.5 text-[10px] font-medium text-slate-200 backdrop-blur-sm">
               {activeAudioPlayback.badgeText}
             </span>
           </div>
 
-          {/* Crisp, Untruncated HTML/CSS Bilingual Captions Overlay */}
-          {(showHiCaption || showEnCaption) && activeCaption && (
+          {/* Timed 1-2 Line Subtitle Cues (never covers the whole picture) */}
+          {timedCue && (timedCue.hiLine || timedCue.enLine) && (
             <div
               data-testid="preview-caption-overlay"
-              className="pointer-events-none absolute inset-x-2.5 bottom-2.5 flex justify-center"
+              className="pointer-events-none absolute inset-x-2 bottom-2 flex justify-center"
             >
-              <div className="max-w-full rounded-xl border border-white/10 bg-black/82 px-3 py-2 text-center shadow-lg backdrop-blur-sm">
-                {showHiCaption && (
-                  <p className="text-sm font-semibold leading-snug text-white sm:text-base">
-                    {activeCaption.hi_text}
+              <div className="max-w-[92%] rounded-lg border border-white/10 bg-black/78 px-2.5 py-1 text-center shadow-md backdrop-blur-sm">
+                {timedCue.hiLine && (
+                  <p className="line-clamp-2 text-xs font-semibold leading-snug text-white sm:text-sm">
+                    {timedCue.hiLine}
                   </p>
                 )}
-                {showEnCaption && (
-                  <p className="mt-0.5 text-xs font-medium leading-snug text-slate-200 sm:text-sm">
-                    {activeCaption.en_text}
+                {timedCue.enLine && (
+                  <p className="line-clamp-2 mt-0.5 text-[11px] font-medium leading-snug text-slate-200 sm:text-xs">
+                    {timedCue.enLine}
                   </p>
                 )}
               </div>
@@ -702,33 +703,50 @@ export function EditorTab({ workspace, onRefresh }: EditorTabProps) {
             ))}
             <button
               type="button"
-              onClick={() => setToolPanel("captions")}
-              className="kr-tap inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-slate-200 hover:bg-white/10"
+              aria-expanded={fullTextOpen}
+              onClick={() => setFullTextOpen((open) => !open)}
+              className={`kr-tap inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs transition ${
+                fullTextOpen
+                  ? "border-violet-400/50 bg-violet-500/20 text-white"
+                  : "border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"
+              }`}
             >
               <Eye className="h-3.5 w-3.5 text-violet-300" />
               Full Text
+              {fullTextOpen ? (
+                <ChevronUp className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5" />
+              )}
             </button>
           </div>
         </div>
 
-        <p className="mt-1.5 text-[11px] text-[var(--kr-muted)]">
+        <p className="mt-1 text-[11px] text-[var(--kr-muted)]">
           {audioPlaybackNotice ?? activeAudioPlayback.detailText}
         </p>
 
-        {/* Compact Full-Text Preview Bar (never truncated) */}
-        {activeCaption && (
+        {/* Expandable Full Text Inspector (collapsed by default so preview + timeline stay together on mobile) */}
+        {fullTextOpen && activeCaption && (
           <div
-            data-testid="full-caption-bar"
-            className="mt-2 rounded-xl border border-white/10 bg-black/35 px-3 py-2 text-xs"
+            data-testid="full-text-inspector-inline"
+            className="mt-2 rounded-xl border border-white/10 bg-black/35 p-3 text-xs"
           >
-            <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-wider text-violet-300">
-              <span>Current Playhead Script</span>
-              <span>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] uppercase tracking-wider text-violet-300">
+              <span>Full Playhead Script · {activeSceneMeta?.title ?? activeClip?.label}</span>
+              <span className="font-mono">
                 [{activeCaption.in_frame}, {activeCaption.out_frame})
+                {timedCue ? ` · Cue ${timedCue.cueIndex + 1}/${timedCue.totalCues}` : ""}
               </span>
             </div>
-            <p className="mt-1 font-medium text-white">{activeCaption.hi_text}</p>
-            <p className="mt-0.5 text-slate-300">{activeCaption.en_text}</p>
+            <p className="mt-1.5 text-sm leading-relaxed text-white">{activeCaption.hi_text}</p>
+            <p className="mt-1 text-xs leading-relaxed text-slate-300">{activeCaption.en_text}</p>
+            {activeSceneMeta && (
+              <p className="mt-2 border-t border-white/10 pt-2 text-[11px] text-[var(--kr-muted)]">
+                <strong className="text-slate-300">Plate Prompt:</strong>{" "}
+                {activeSceneMeta.visual_prompt}
+              </p>
+            )}
           </div>
         )}
       </section>

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { getDbPolicy, getSql } from "../../lib/db.ts";
-import { ProjectNotFoundError } from "./route-errors.ts";
+import { ProjectNotFoundError, StoryRevisionConflictError } from "./route-errors.ts";
 import {
   DEFAULT_ZERO_SPEND_POLICY,
   KrJobV1Schema,
@@ -408,8 +408,17 @@ export async function createStoryPatchProposal(
   userId: string,
   projectId: string,
   instruction: string,
+  expectedStoryRevisionId?: string,
 ) {
   const state = await loadWorkspaceState(userId, projectId);
+  if (
+    expectedStoryRevisionId &&
+    state.storyRevision.revision_id !== expectedStoryRevisionId
+  ) {
+    throw new StoryRevisionConflictError(
+      `Story moved to v${state.storyRevision.version}; refresh before proposing a patch.`,
+    );
+  }
   const routeCheck = evaluateDirectorRoute(
     state.settingsRevision.snapshot.director_route,
     state.settingsRevision.snapshot.zero_spend,
@@ -1052,7 +1061,15 @@ export async function createOrRenderExport(params: {
         ${params.format}, 'ready', ${fileName}, ${buf.byteLength}, ${checksum}
       )
     `;
-    return { export_id: exportId, status: "ready", file_name: fileName, content: srt, mime: "text/plain; charset=utf-8" };
+    return {
+      export_id: exportId,
+      status: "ready" as const,
+      file_name: fileName,
+      content: srt,
+      mime: "text/plain; charset=utf-8",
+      deduplicated: false,
+      message: `Downloaded ${fileName} (${buf.byteLength} bytes).`,
+    };
   }
 
   if (params.format === "bundle_json") {
@@ -1070,26 +1087,68 @@ export async function createOrRenderExport(params: {
         'bundle_json', 'ready', ${fileName}, ${buf.byteLength}, ${checksum}
       )
     `;
-    return { export_id: exportId, status: "ready", file_name: fileName, content: jsonText, mime: "application/json" };
+    return {
+      export_id: exportId,
+      status: "ready" as const,
+      file_name: fileName,
+      content: jsonText,
+      mime: "application/json",
+      deduplicated: false,
+      message: `Downloaded ${fileName} (${buf.byteLength} bytes).`,
+    };
   }
 
-  // MP4 exports (mp4_hi / mp4_en): honestly queued for the paired Colab/local worker (never faked in browser!)
+  // MP4 exports (mp4_hi / mp4_en): deduplicate active queued/rendering exports for the same
+  // owner/project/timeline revision/format, and honestly report worker/media requirement.
+  const existingActive = await sql<{
+    export_id: string;
+    status: string;
+    file_name: string;
+    error_message: string | null;
+  }>`
+    SELECT export_id, status, file_name, error_message
+    FROM kr_exports
+    WHERE user_id = ${params.userId}
+      AND project_id = ${params.projectId}
+      AND timeline_revision_id = ${state.timelineRevisionId}
+      AND format = ${params.format}
+      AND status IN ('queued', 'rendering')
+    ORDER BY created_at DESC
+    LIMIT 1
+  `;
+
+  if (existingActive.length > 0) {
+    const existing = existingActive[0];
+    return {
+      export_id: existing.export_id,
+      status: existing.status,
+      file_name: existing.file_name,
+      content: null,
+      mime: "video/mp4",
+      deduplicated: true,
+      message: `Queued, not rendered; worker/media required. Reusing active queue entry for Timeline v${state.timeline.version}.`,
+    };
+  }
+
   const lang = params.format === "mp4_hi" ? "hi" : "en";
   const fileName = `${slug}-v${state.timeline.version}.${lang}.mp4`;
+  const queueReason = "Queued, not rendered; worker/media required.";
   await sql`
     INSERT INTO kr_exports (
       export_id, project_id, user_id, timeline_revision_id, format, status, file_name, error_message
     ) VALUES (
       ${exportId}, ${params.projectId}, ${params.userId}, ${state.timelineRevisionId},
-      ${params.format}, 'queued', ${fileName}, 'Waiting for paired Colab/local worker to assemble edited MP4 from timeline revision.'
+      ${params.format}, 'queued', ${fileName}, ${queueReason}
     )
   `;
   return {
     export_id: exportId,
-    status: "queued",
+    status: "queued" as const,
     file_name: fileName,
     content: null,
     mime: "video/mp4",
+    deduplicated: false,
+    message: queueReason,
   };
 }
 

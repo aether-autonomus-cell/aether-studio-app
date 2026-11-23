@@ -41,6 +41,7 @@ export function StoryTab({
     e.preventDefault();
     if (!draftInstruction.trim() || busy) return;
     setBusy(true);
+    setAssistantNote(null);
     setErrorMsg(null);
     try {
       const res = await krApiFetch<{
@@ -52,6 +53,7 @@ export function StoryTab({
         body: JSON.stringify({
           project_id: workspace.project.project_id,
           instruction: draftInstruction.trim(),
+          expected_story_revision_id: storyRevision.revision_id,
         }),
       });
       setAssistantNote(
@@ -174,10 +176,11 @@ export function StoryTab({
         <form onSubmit={handlePropose} className="mt-3 flex flex-col gap-2.5">
           <textarea
             rows={2}
+            disabled={busy}
             value={draftInstruction}
             onChange={(e) => onDraftInstructionChange(e.target.value)}
-            placeholder="Describe a story edit (e.g., 'Make scene 2 drenched in rain' or 'Add a dawn ending scene')..."
-            className="kr-input w-full rounded-xl px-3.5 py-2.5 text-sm"
+            placeholder="Describe a story edit (e.g., 'Scene 2 mein halki baarish add karo' or 'Add a dawn ending scene')..."
+            className="kr-input w-full rounded-xl px-3.5 py-2.5 text-sm disabled:opacity-60"
           />
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap gap-1.5">
@@ -185,16 +188,24 @@ export function StoryTab({
                 "Add monsoon rain mood",
                 "Tighten Hindi pacing",
                 "Add dawn ending scene",
-              ].map((chip) => (
-                <button
-                  key={chip}
-                  type="button"
-                  onClick={() => onDraftInstructionChange(chip)}
-                  className="kr-tap rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-[var(--kr-muted)] hover:border-violet-400/40 hover:text-white"
-                >
-                  {chip}
-                </button>
-              ))}
+              ].map((chip) => {
+                const selected = draftInstruction.trim() === chip;
+                return (
+                  <button
+                    key={chip}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onDraftInstructionChange(chip)}
+                    className={`kr-tap rounded-lg border px-3 py-1.5 text-xs transition disabled:opacity-50 ${
+                      selected
+                        ? "border-violet-400/60 bg-violet-500/20 text-white"
+                        : "border-white/10 bg-white/5 text-[var(--kr-muted)] hover:border-violet-400/40 hover:text-white"
+                    }`}
+                  >
+                    {chip}
+                  </button>
+                );
+              })}
             </div>
             <button
               type="submit"

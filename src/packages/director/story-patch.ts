@@ -147,9 +147,85 @@ export function buildDefaultStoryBible(projectId: string, customPrompt?: string)
   };
 }
 
+export class StoryPatchRequestError extends Error {
+  readonly status = 422;
+  readonly code = "STORY_EDIT_CLARIFICATION_REQUIRED";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "StoryPatchRequestError";
+  }
+}
+
+function hasEndingPreservationConstraint(instruction: string): boolean {
+  return (
+    /\b(ending|end|finale|climax)\b[^.!?\n]{0,48}\b(unchanged|preserve|keep|same|intact|mat\s+badl\w*|na\s+badl\w*|nahi\s+badl\w*|same\s+rakh\w*|untouched)\b/i.test(
+      instruction,
+    ) ||
+    /\b(preserve|keep|don'?t\s+(?:change|touch|alter|edit|modify)|do\s+not\s+(?:change|touch|alter|edit|modify)|leave)\b[^.!?\n]{0,48}\b(ending|end|finale)\b/i.test(
+      instruction,
+    ) ||
+    /\b(no\s+new\s+scene|don'?t\s+add\s+(?:a\s+)?scene|do\s+not\s+add\s+(?:a\s+)?scene|scene\s+mat\s+add|naya\s+scene\s+nahi)\b/i.test(
+      instruction,
+    )
+  );
+}
+
+function wantsNewSceneInsertion(instruction: string): boolean {
+  if (hasEndingPreservationConstraint(instruction)) return false;
+  return (
+    /\b(add\s+(?:a\s+)?(?:new\s+)?(?:dawn\s+)?(?:ending\s+)?scene|insert\s+(?:a\s+)?scene|append\s+(?:a\s+)?scene|create\s+(?:a\s+)?(?:new\s+)?scene|naya\s+scene\s+add|ek\s+aur\s+scene\s+(?:add|jod|lag))\b/i.test(
+      instruction,
+    ) || /^\s*add\s+dawn\s+ending\s+scene\s*$/i.test(instruction)
+  );
+}
+
+function parseExplicitTargetSceneNumber(instruction: string): number | null {
+  const matches = [...instruction.matchAll(/\b(?:scene|sc|दृश्य)\s*#?_?0?(\d+)\b/gi)];
+  if (matches.length === 0) return null;
+
+  const positiveTargets: number[] = [];
+  for (const m of matches) {
+    const num = Number.parseInt(m[1], 10);
+    const idx = m.index ?? 0;
+    const windowAfter = instruction.slice(idx, Math.min(instruction.length, idx + 48));
+    const windowBefore = instruction.slice(Math.max(0, idx - 32), idx);
+    const isPreserved =
+      /\b(unchanged|preserve|keep|untouched|mat\s+badl\w*|na\s+badl\w*|skip)\b/i.test(windowAfter) ||
+      /\b(except|not|leave|preserve)\b/i.test(windowBefore);
+    if (!isPreserved && Number.isFinite(num)) {
+      positiveTargets.push(num);
+    }
+  }
+
+  const unique = [...new Set(positiveTargets)];
+  if (unique.length === 1) return unique[0];
+  if (unique.length > 1) {
+    throw new StoryPatchRequestError(
+      `Multiple target scenes (${unique.join(", ")}) specified in one request. Edit one scene per proposal so canon diffs stay verifiable.`,
+    );
+  }
+  return null;
+}
+
+function hasPositiveCharacterEditRequest(instruction: string): boolean {
+  const mentionsCharChange =
+    /\b(change|rename|replace|remove|modify|redesign|alter)\b[^.!?\n]{0,36}\b(character|characters|meera|kabir|wardrobe|shawl|lantern)\b/i.test(
+      instruction,
+    );
+  if (!mentionsCharChange) return false;
+  const preservesChars =
+    /\b(character|characters|meera|kabir)\b[^.!?\n]{0,40}\b(unchanged|preserve|keep|same|intact|mat\s+badl\w*)\b/i.test(
+      instruction,
+    );
+  return !preservesChars;
+}
+
 /**
  * Propose a canon-preserving structured StoryPatch from a chat instruction.
- * Respects `locked_canon: true` scenes unless explicitly instructed to override.
+ * Respects `locked_canon: true` scenes unless explicitly instructed to override,
+ * honors negative/preservation constraints, and fails closed with clarification on
+ * unsupported or ambiguous instructions instead of emitting unrelated canned diffs.
  */
 export function proposeStoryPatch(params: {
   revision: KrStoryRevision;
@@ -157,15 +233,22 @@ export function proposeStoryPatch(params: {
   allowLockedOverride?: boolean;
 }): { patch: KrStoryPatch; assistantMessage: string } {
   const { revision, instruction } = params;
+  const trimmed = instruction.trim();
   const allowLocked = params.allowLockedOverride ?? false;
-  const lower = instruction.toLowerCase();
+  const lower = trimmed.toLowerCase();
   const operations: KrStoryPatchOperation[] = [];
 
-  const targetScene =
-    revision.bible.scenes.find((s) => !s.locked_canon) ??
-    (allowLocked ? revision.bible.scenes[0] : undefined);
+  if (!trimmed) {
+    throw new StoryPatchRequestError("Please enter a specific story edit instruction.");
+  }
 
-  if (lower.includes("add scene") || lower.includes("new scene") || lower.includes("ending")) {
+  if (hasPositiveCharacterEditRequest(trimmed)) {
+    throw new StoryPatchRequestError(
+      "Character canon (Meera, Kabir, wardrobe, brass lantern) is protected across revisions. Target an editable scene's atmosphere, lighting, camera direction, or narration pacing instead.",
+    );
+  }
+
+  if (wantsNewSceneInsertion(trimmed)) {
     const nextIdx = revision.bible.scenes.length;
     const newSceneId = `sc_${String(nextIdx + 1).padStart(2, "0")}`;
     const newScene = {
@@ -196,24 +279,85 @@ export function proposeStoryPatch(params: {
       after: newScene,
       rationale: "Append new scene while preserving all existing locked canon and character profiles.",
     });
-  } else if (targetScene) {
-    const moodSuffix = lower.includes("rain") || lower.includes("storm")
-      ? "drenched in steady monsoon rain with glistening sandstone highlights"
-      : lower.includes("tense") || lower.includes("mystery")
-        ? "deepened shadows and tighter dramatic framing"
-        : "sharper emotional pacing and cleaner visual contrast";
+  } else {
+    const explicitSceneNum = parseExplicitTargetSceneNumber(trimmed);
+    let targetScene: KrStoryBible["scenes"][number] | undefined;
 
-    operations.push({
-      op_id: `op_${crypto.randomBytes(4).toString("hex")}`,
-      op: "update_scene",
-      target_id: targetScene.scene_id,
-      field_path: `scenes.${targetScene.scene_id}.visual_prompt`,
-      before: targetScene.visual_prompt,
-      after: `${targetScene.visual_prompt} Emphasize ${moodSuffix}.`,
-      rationale: `Refine unlocked scene ${targetScene.scene_id} visual direction per user note without breaking Meera/Kabir canon.`,
-    });
+    if (explicitSceneNum !== null) {
+      if (explicitSceneNum < 1 || explicitSceneNum > revision.bible.scenes.length) {
+        throw new StoryPatchRequestError(
+          `Scene ${explicitSceneNum} does not exist in Story v${revision.version} (valid scenes: 1–${revision.bible.scenes.length}).`,
+        );
+      }
+      const candidate = revision.bible.scenes[explicitSceneNum - 1];
+      if (candidate.locked_canon && !allowLocked) {
+        throw new StoryPatchRequestError(
+          `Scene ${explicitSceneNum} (${candidate.title}) is canon-locked. Unlock it first or target an editable scene (e.g. Scene 2).`,
+        );
+      }
+      targetScene = candidate;
+    } else {
+      targetScene =
+        revision.bible.scenes.find((s) => !s.locked_canon) ??
+        (allowLocked ? revision.bible.scenes[0] : undefined);
+    }
 
-    if (lower.includes("hindi") || lower.includes("tight") || lower.includes("shorter")) {
+    if (!targetScene) {
+      throw new StoryPatchRequestError(
+        "All scenes in this revision are canon-locked. Unlock an editable scene first before proposing a scene diff.",
+      );
+    }
+
+    const isLightRain =
+      /\b(light\s+rain|halki\s+b[a]+rish|halki\s+barsaat|drizzle|gentle\s+rain)\b/i.test(lower) ||
+      /हल्की\s*बारिश/.test(trimmed);
+    const isRain =
+      isLightRain ||
+      /\b(rain|monsoon|storm|b[a]+rish|barsaat)\b/i.test(lower) ||
+      /बारिश|बरसात/.test(trimmed);
+    const isTenseOrMood =
+      /\b(tense|tension|cliffhanger|suspense|mystery|mysterious|shadow|shadows|dark|darker|dramatic|atmosphere|mood|lighting|mahaul|mist|fog|lantern|glow)\b/i.test(
+        lower,
+      );
+    const wantsHindiPacing =
+      /\b(hindi|pacing|tight|tighten|shorter|concise)\b/i.test(lower) &&
+      !/\b(narration|hindi)\b[^.!?\n]{0,30}\b(unchanged|preserve|same)\b/i.test(lower);
+    const wantsCamera =
+      /\b(camera|wide\s+shot|close[- ]?up|closeup|push[- ]?in|pull[- ]?back|angle|framing)\b/i.test(
+        lower,
+      );
+
+    if (isRain || isTenseOrMood) {
+      const moodSuffix = isLightRain
+        ? "light monsoon rain atmosphere with delicate mist and softly glistening sandstone surfaces"
+        : isRain
+          ? "steady monsoon rain with glistening sandstone highlights"
+          : "deepened twilight shadows and tighter dramatic atmospheric contrast";
+
+      operations.push({
+        op_id: `op_${crypto.randomBytes(4).toString("hex")}`,
+        op: "update_scene",
+        target_id: targetScene.scene_id,
+        field_path: `scenes.${targetScene.scene_id}.visual_prompt`,
+        before: targetScene.visual_prompt,
+        after: `${targetScene.visual_prompt} Emphasize ${moodSuffix}.`,
+        rationale: `Refine editable scene ${targetScene.scene_id} atmosphere per user request while preserving characters, locked canon, and ending.`,
+      });
+
+      if (isLightRain && !targetScene.mood.includes("rain")) {
+        operations.push({
+          op_id: `op_${crypto.randomBytes(4).toString("hex")}`,
+          op: "update_scene",
+          target_id: targetScene.scene_id,
+          field_path: `scenes.${targetScene.scene_id}.mood`,
+          before: targetScene.mood,
+          after: `${targetScene.mood}, light monsoon drizzle`,
+          rationale: `Record light rain atmosphere on scene ${targetScene.scene_id}.`,
+        });
+      }
+    }
+
+    if (wantsHindiPacing) {
       operations.push({
         op_id: `op_${crypto.randomBytes(4).toString("hex")}`,
         op: "update_scene",
@@ -221,19 +365,32 @@ export function proposeStoryPatch(params: {
         field_path: `scenes.${targetScene.scene_id}.hi_narration`,
         before: targetScene.hi_narration,
         after: `${targetScene.hi_narration} गूँज और गहरी हो जाती है।`,
-        rationale: "Tighten Hindi cadence to match visual pulse.",
+        rationale: `Tighten Hindi cadence on editable scene ${targetScene.scene_id}.`,
       });
     }
-  } else {
-    operations.push({
-      op_id: `op_${crypto.randomBytes(4).toString("hex")}`,
-      op: "update_bible",
-      target_id: revision.bible.project_id,
-      field_path: "style_bible",
-      before: revision.bible.style_bible,
-      after: `${revision.bible.style_bible} ${instruction.trim().slice(0, 120)}`,
-      rationale: "All scenes are canon-locked; proposed update on shared style bible only.",
-    });
+
+    if (wantsCamera) {
+      const nextCam = /\bclose[- ]?up|closeup\b/i.test(lower)
+        ? "intimate medium close-up slow push-in"
+        : /\bwide\b/i.test(lower)
+          ? "wide architectural framing"
+          : `${targetScene.camera_direction} with measured dramatic framing`;
+      operations.push({
+        op_id: `op_${crypto.randomBytes(4).toString("hex")}`,
+        op: "update_scene",
+        target_id: targetScene.scene_id,
+        field_path: `scenes.${targetScene.scene_id}.camera_direction`,
+        before: targetScene.camera_direction,
+        after: nextCam,
+        rationale: `Adjust camera direction on editable scene ${targetScene.scene_id}.`,
+      });
+    }
+  }
+
+  if (operations.length === 0) {
+    throw new StoryPatchRequestError(
+      `Could not map "${trimmed.slice(0, 70)}" to a concrete edit on Story v${revision.version}. Specify an editable scene (e.g. Scene 2 or Scene 3) and a clear atmosphere/rain, lighting, camera, Hindi pacing, or new-scene change.`,
+    );
   }
 
   const patch: KrStoryPatch = {
@@ -241,14 +398,14 @@ export function proposeStoryPatch(params: {
     project_id: revision.project_id,
     base_story_revision_id: revision.revision_id,
     status: "pending",
-    summary: `Canon-safe patch for "${instruction.trim().slice(0, 80)}"`,
+    summary: `Canon-safe patch for "${trimmed.slice(0, 80)}"`,
     operations,
     created_at: new Date().toISOString(),
   };
 
   return {
     patch,
-    assistantMessage: `Prepared ${operations.length} structured diff operation(s) anchored to revision v${revision.version}. Locked canon scenes remain untouched. Review and Accept, Reject, or Rebase below.`,
+    assistantMessage: `Prepared ${operations.length} structured diff operation(s) anchored to Story v${revision.version}. Locked canon scenes remain untouched. Review and Accept, Reject, or Rebase below.`,
   };
 }
 

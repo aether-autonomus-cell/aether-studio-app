@@ -4,6 +4,7 @@ import {
   type ZeroSpendPolicy,
 } from "../contracts/schemas.ts";
 import { loadTaskInstructions } from "../skill-runtime/instructions.ts";
+import { evaluateSkillRegistry } from "../skill-runtime/registry.ts";
 import { dispatchSkillTool } from "../skill-runtime/dispatcher.ts";
 import type { KrSkillTraceEntry } from "../contracts/schemas.ts";
 
@@ -65,6 +66,7 @@ export function evaluateDirectorRoute(
 export interface DirectorGuidanceContext {
   instructionsLoaded: Array<{ skill_id: string; file_path: string; spdx_license: string }>;
   skillTraces: KrSkillTraceEntry[];
+  skippedTools: Array<{ tool_name: string; skill_id: string; reason: string }>;
 }
 
 export function gatherDirectorGuidance(
@@ -80,18 +82,40 @@ export function gatherDirectorGuidance(
     spdx_license: d.spdx_license,
   }));
 
+  const registry = evaluateSkillRegistry({ verifyHashes: false });
+  const youtubeSkill = registry.skills.find((s) => s.skill_id === "youtube.agent");
+  const cinematicSkill = registry.skills.find((s) => s.skill_id === "cinematic.director");
+
   const traces: KrSkillTraceEntry[] = [];
+  const skippedTools: Array<{ tool_name: string; skill_id: string; reason: string }> = [];
+
   if (openingHookText.trim()) {
-    const hookRes = dispatchSkillTool("youtube_score_hooks", { hook: openingHookText });
-    traces.push(hookRes.trace);
+    if (youtubeSkill?.execution_ready) {
+      const hookRes = dispatchSkillTool("youtube_score_hooks", { hook: openingHookText });
+      traces.push(hookRes.trace);
+    } else if (youtubeSkill) {
+      skippedTools.push({
+        tool_name: "youtube_score_hooks",
+        skill_id: youtubeSkill.skill_id,
+        reason: youtubeSkill.execution_note,
+      });
+    }
   }
   if (lines.length > 0) {
-    const beatRes = dispatchSkillTool("cinematic_lint_beats", {
-      title: storyTitle,
-      lines: lines.map((l) => ({ ...l, typed: "", gap_after: 0.45 })),
-    });
-    traces.push(beatRes.trace);
+    if (cinematicSkill?.execution_ready) {
+      const beatRes = dispatchSkillTool("cinematic_lint_beats", {
+        title: storyTitle,
+        lines: lines.map((l) => ({ ...l, typed: "", gap_after: 0.45 })),
+      });
+      traces.push(beatRes.trace);
+    } else if (cinematicSkill) {
+      skippedTools.push({
+        tool_name: "cinematic_lint_beats",
+        skill_id: cinematicSkill.skill_id,
+        reason: cinematicSkill.execution_note,
+      });
+    }
   }
 
-  return { instructionsLoaded, skillTraces: traces };
+  return { instructionsLoaded, skillTraces: traces, skippedTools };
 }
