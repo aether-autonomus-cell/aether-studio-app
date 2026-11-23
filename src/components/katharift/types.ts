@@ -88,11 +88,14 @@ export async function krApiFetch<T>(url: string, init?: RequestInit): Promise<T>
   const res = await fetch(url, { ...init, headers });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err = new Error((data as { error?: string }).error || `Request failed (${res.status})`) as Error & {
+    const body = data as { error?: string; code?: string };
+    const err = new Error(body.error || `Request failed (${res.status})`) as Error & {
       status?: number;
+      code?: string;
       payload?: unknown;
     };
     err.status = res.status;
+    err.code = body.code;
     err.payload = data;
     throw err;
   }

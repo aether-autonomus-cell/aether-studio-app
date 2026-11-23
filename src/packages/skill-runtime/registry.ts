@@ -1,6 +1,19 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+export class SkillRegistryUnavailableError extends Error {
+  readonly status = 500;
+  readonly code = "SKILLS_REGISTRY_UNAVAILABLE";
+
+  constructor(
+    message = "Skill registry is unavailable on the server. Provisioned skills assets are missing or unreadable.",
+  ) {
+    super(message);
+    this.name = "SkillRegistryUnavailableError";
+  }
+}
 
 export type SkillStatus =
   | "ready"
@@ -79,18 +92,84 @@ export interface SkillRegistryReport {
   skills: SkillRuntimeRecord[];
 }
 
-let cachedLock: SkillsLockDocument | null = null;
+let cachedLock: { root: string; doc: SkillsLockDocument } | null = null;
 
-function resolveRepoRoot(): string {
-  return process.cwd();
+function isValidSkillsRoot(dir: string): boolean {
+  try {
+    return (
+      fs.existsSync(path.join(dir, "skills.lock.json")) &&
+      fs.existsSync(path.join(dir, "skills", "manifests"))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the directory containing the provisioned `skills.lock.json`,
+ * `skills/manifests/`, and `skills/vendor/`. Fails closed with
+ * `SkillRegistryUnavailableError` (without exposing internal server paths or
+ * falling back to mock/empty data) if the registry bundle is absent.
+ */
+export function resolveSkillsRoot(): string {
+  const override = process.env.KR_SKILLS_ROOT?.trim();
+  if (override) {
+    if (isValidSkillsRoot(override)) {
+      return override;
+    }
+    throw new SkillRegistryUnavailableError();
+  }
+
+  const candidates: string[] = [];
+  const pushCandidate = (dir: string | undefined) => {
+    const trimmed = dir?.trim();
+    if (trimmed && !candidates.includes(trimmed)) {
+      candidates.push(trimmed);
+    }
+  };
+
+  pushCandidate(process.cwd());
+  pushCandidate(process.env.LAMBDA_TASK_ROOT);
+
+  try {
+    let dir = path.dirname(fileURLToPath(import.meta.url));
+    for (let i = 0; i < 6; i += 1) {
+      pushCandidate(dir);
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch {
+    /* ignore if import.meta.url is unavailable */
+  }
+
+  pushCandidate("/var/task");
+
+  for (const candidate of candidates) {
+    if (isValidSkillsRoot(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new SkillRegistryUnavailableError();
 }
 
 export function loadSkillsLock(): SkillsLockDocument {
-  if (cachedLock) return cachedLock;
-  const lockPath = path.join(resolveRepoRoot(), "skills.lock.json");
-  const raw = fs.readFileSync(lockPath, "utf8");
-  cachedLock = JSON.parse(raw) as SkillsLockDocument;
-  return cachedLock;
+  const root = resolveSkillsRoot();
+  if (cachedLock && cachedLock.root === root) return cachedLock.doc;
+  const lockPath = path.join(root, "skills.lock.json");
+  try {
+    const raw = fs.readFileSync(lockPath, "utf8");
+    const parsed = JSON.parse(raw) as SkillsLockDocument;
+    if (!parsed || !Array.isArray(parsed.skills)) {
+      throw new SkillRegistryUnavailableError();
+    }
+    cachedLock = { root, doc: parsed };
+    return parsed;
+  } catch (err) {
+    if (err instanceof SkillRegistryUnavailableError) throw err;
+    throw new SkillRegistryUnavailableError();
+  }
 }
 
 function sha256File(absPath: string): string {
@@ -104,7 +183,7 @@ export function evaluateSkillRegistry(opts?: {
 }): SkillRegistryReport {
   const verifyHashes = opts?.verifyHashes ?? true;
   const workerActive = opts?.workerActive ?? process.env.KR_WORKER_ACTIVE === "1";
-  const root = resolveRepoRoot();
+  const root = resolveSkillsRoot();
   const lock = loadSkillsLock();
 
   const records: SkillRuntimeRecord[] = lock.skills.map((skill) => {
@@ -179,6 +258,11 @@ export function evaluateSkillRegistry(opts?: {
     const missingFiles: string[] = [];
     const hashMismatches: Array<{ path: string; expected: string; actual: string }> = [];
     let verified = 0;
+
+    const manifestRel = path.posix.join("skills", "manifests", `${skill.skill_id}.json`);
+    if (!fs.existsSync(path.join(root, manifestRel))) {
+      missingFiles.push(manifestRel);
+    }
 
     for (const file of allFiles) {
       const abs = path.join(root, file.path);

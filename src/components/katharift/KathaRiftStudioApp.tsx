@@ -52,7 +52,7 @@ export function KathaRiftStudioApp() {
 function StudioShell() {
   const [workspace, setWorkspace] = useState<WorkspaceSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<{ message: string; code?: string } | null>(null);
   const [activeTab, setActiveTab] = useState<PrimaryTab>("story");
   const [drawer, setDrawer] = useState<StudioDrawer>("none");
   const [draftInstruction, setDraftInstruction] = useState<string>(() => {
@@ -95,7 +95,14 @@ function StudioShell() {
       const data = await krApiFetch<WorkspaceSnapshot>("/api/kr/workspace");
       setWorkspace(data);
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : "Failed to load workspace");
+      const code =
+        err && typeof err === "object" && "code" in err && typeof (err as { code?: unknown }).code === "string"
+          ? (err as { code: string }).code
+          : undefined;
+      setLoadError({
+        message: err instanceof Error ? err.message : "Failed to load workspace",
+        code,
+      });
     } finally {
       setLoading(false);
     }
@@ -179,13 +186,35 @@ function StudioShell() {
         ) : loadError || !workspace ? (
           <div className="kr-card rounded-2xl border border-amber-400/25 p-6 text-center">
             <p className="text-sm font-semibold text-rose-300">
-              {loadError ?? "Workspace unavailable"}
+              {loadError?.message ?? "Workspace unavailable"}
             </p>
             <p className="mt-2 text-xs text-[var(--kr-muted)]">
-              Preview/production requires durable PostgreSQL (<code>DATABASE_URL</code>) and
-              server auth secrets (<code>BETTER_AUTH_SECRET</code>,{" "}
-              <code>GROK_AUTH_CLIENT_ID</code>, <code>GROK_AUTH_CLIENT_SECRET</code>). Server auth
-              fails closed and is never bypassed by frontend flags.
+              {loadError?.code === "OWNER_FORBIDDEN" ? (
+                <>
+                  This studio is restricted to the verified Google owner account (
+                  <code>KR_OWNER_EMAIL</code>). Sign out and sign in with the authorized Google
+                  account.
+                </>
+              ) : loadError?.code === "SKILLS_REGISTRY_UNAVAILABLE" ? (
+                <>
+                  Provisioned skill registry assets are missing or failed verification in the server
+                  bundle. Redeploy with verified skill registry files intact.
+                </>
+              ) : loadError?.code === "DB_NOT_CONFIGURED" ||
+                loadError?.code === "AUTH_NOT_CONFIGURED" ? (
+                <>
+                  Production requires durable PostgreSQL (<code>DATABASE_URL</code>), Better Auth (
+                  <code>BETTER_AUTH_SECRET</code>, <code>BETTER_AUTH_URL</code>), Google OAuth (
+                  <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code>), and the
+                  verified owner allowlist (<code>KR_OWNER_EMAIL</code>). Server auth fails closed
+                  and is never bypassed by frontend flags.
+                </>
+              ) : (
+                <>
+                  Could not load your studio workspace right now. Please retry or check server logs
+                  if the issue persists.
+                </>
+              )}
             </p>
             <button
               type="button"

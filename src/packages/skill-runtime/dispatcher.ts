@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import type { KrSkillTraceEntry } from "../contracts/schemas.ts";
-import { evaluateSkillRegistry } from "./registry.ts";
+import { evaluateSkillRegistry, resolveSkillsRoot } from "./registry.ts";
 
 export const HookScoreInputSchema = z.object({
   hook: z.string().min(1).max(600),
@@ -96,16 +96,25 @@ function sanitizeSummary(obj: Record<string, unknown>): Record<string, unknown> 
 }
 
 function runPythonJsonScript(scriptRelPath: string, args: string[]): { ok: boolean; parsed?: any; raw?: string; error?: string } {
-  const abs = path.join(process.cwd(), scriptRelPath);
+  const root = resolveSkillsRoot();
+  const abs = path.join(root, scriptRelPath);
   if (!fs.existsSync(abs)) {
-    return { ok: false, error: `Missing vendored script ${scriptRelPath}` };
+    return { ok: false, error: `Missing vendored skill asset: ${scriptRelPath}` };
   }
   const proc = spawnSync("python3", [abs, ...args], {
     encoding: "utf8",
     timeout: 8000,
   });
   if (proc.error) {
-    return { ok: false, error: proc.error.message };
+    const errCode = (proc.error as NodeJS.ErrnoException).code;
+    if (errCode === "ENOENT") {
+      return {
+        ok: false,
+        error:
+          "Python runtime is unavailable in this serverless environment; run this skill via the paired Colab/local worker.",
+      };
+    }
+    return { ok: false, error: "Skill script execution failed." };
   }
   if (proc.status !== 0) {
     return { ok: false, error: (proc.stderr || proc.stdout || `exit ${proc.status}`).trim() };
