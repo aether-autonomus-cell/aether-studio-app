@@ -3,13 +3,19 @@ import assert from "node:assert/strict";
 import type { KrStoryBible } from "../contracts/schemas.ts";
 import {
   buildTimelineFromStory,
+  clampZoomPxPerFrame,
   commitEditorEdit,
+  computeScrollLeftForPlayhead,
+  computeTrimDeltaFrames,
   createEditorHistory,
+  dbToLinearGain,
   detectBilingualSilenceSuggestions,
   exportTimelineSrt,
+  frameFromTrackClientX,
   redoEditorHistory,
   rippleDeleteRange,
   splitAtFrame,
+  trimClipInEdge,
   trimClipOutEdge,
   undoEditorHistory,
   updateAudioStem,
@@ -153,4 +159,108 @@ test("bilingual silence detector inspects BOTH HI and EN tracks and stem control
   const srtEn = exportTimelineSrt(muted, "en");
   assert.ok(srtHi.includes("मीरा"));
   assert.ok(srtEn.includes("Meera descends"));
+});
+
+test("[UI/EDL] trimClipInEdge adjusts source_in_frame, shifts downstream bilingual tracks, and restores cleanly", () => {
+  const tl = buildTimelineFromStory({
+    timeline_id: "tl_trim_in",
+    project_id: "proj_stepwell",
+    story_revision_id: "srev_1",
+    settings_revision_id: "set_1",
+    bible: sampleBible,
+  });
+
+  // Trim first clip in-edge forward by +24f -> duration drops from 96f to 72f, clip 2 shifts to [72, 168)
+  const trimmedIn = trimClipInEdge(tl, tl.clips[0].clip_id, 24);
+  assert.equal(trimmedIn.clips[0].source_in_frame, 24);
+  assert.equal(trimmedIn.clips[0].in_frame, 0);
+  assert.equal(trimmedIn.clips[0].out_frame, 72);
+  assert.equal(trimmedIn.clips[1].in_frame, 72);
+  assert.equal(trimmedIn.clips[1].out_frame, 168);
+  assert.equal(trimmedIn.captions[1].in_frame, 72);
+  assert.equal(trimmedIn.effects[1].in_frame, 72);
+  assert.equal(trimmedIn.total_frames, 168);
+
+  // Dragging left handle back outward (-24f) restores original source_in_frame=0 and total_frames=192
+  const restored = trimClipInEdge(trimmedIn, trimmedIn.clips[0].clip_id, -24);
+  assert.equal(restored.clips[0].source_in_frame, 0);
+  assert.equal(restored.clips[0].out_frame, 96);
+  assert.equal(restored.total_frames, 192);
+});
+
+test("[UI/EDL] mobile timeline gestures: zoom clamp, scrub frame mapping, horizontal scroll follow, and touch trim deltas", () => {
+  assert.equal(clampZoomPxPerFrame(0.1), 0.5);
+  assert.equal(clampZoomPxPerFrame(9.0), 4.0);
+  assert.equal(clampZoomPxPerFrame(1.5), 1.5);
+
+  // Scrubbing inside a horizontally scrolled 390px viewport at 2.0 px/frame
+  const frame = frameFromTrackClientX({
+    clientX: 116,
+    trackViewportLeft: 16,
+    scrollLeft: 80,
+    pxPerFrame: 2,
+    totalFrames: 192,
+    leadingPaddingPx: 16,
+  });
+  // contentX = (116 - 16) + 80 - 16 = 164px -> 164 / 2 = 82 frames
+  assert.equal(frame, 82);
+
+  // Touch trim drag right by +36px at 1.5 px/frame -> +24 frames
+  assert.equal(
+    computeTrimDeltaFrames({ startClientX: 120, currentClientX: 156, pxPerFrame: 1.5 }),
+    24,
+  );
+  // Touch trim drag left by -18px at 1.5 px/frame -> -12 frames
+  assert.equal(
+    computeTrimDeltaFrames({ startClientX: 120, currentClientX: 102, pxPerFrame: 1.5 }),
+    -12,
+  );
+
+  // Horizontal scroll follows playhead when it moves past right edge of a 360px phone track viewport
+  const nextScroll = computeScrollLeftForPlayhead({
+    playheadFrame: 180,
+    pxPerFrame: 2.5,
+    viewportWidth: 360,
+    currentScrollLeft: 0,
+    leadingPaddingPx: 16,
+  });
+  assert.ok(nextScroll > 0);
+
+  // Gain dB to linear [0..1] conversion respects mute and -48dB floor
+  assert.equal(dbToLinearGain(0, false), 1);
+  assert.equal(dbToLinearGain(0, true), 0);
+  assert.equal(dbToLinearGain(-48, false), 0);
+  assert.ok(Math.abs(dbToLinearGain(-6, false) - 0.501) < 0.01);
+});
+
+test("[UI/EDL] long bilingual captions (>74 chars) are preserved without truncation in timeline and SRT", () => {
+  const longHi =
+    "मीरा अपने पीतल के लालटेन के उजाले में चांद बावड़ी की प्राचीन पत्थर की सीढ़ियों से धीरे-धीरे नीचे उतरती है और हर शिलालेख को ध्यान से देखती है।";
+  const longEn =
+    "Meera carefully descends the weathered sandstone steps of Chand Baori holding her brass lantern high while examining every ancient carving along the shadowy wall.";
+  assert.ok(longHi.length > 74);
+  assert.ok(longEn.length > 74);
+
+  const longBible: KrStoryBible = {
+    ...sampleBible,
+    scenes: [
+      {
+        ...sampleBible.scenes[0],
+        hi_narration: longHi,
+        en_narration: longEn,
+      },
+    ],
+  };
+  const tl = buildTimelineFromStory({
+    timeline_id: "tl_long_caps",
+    project_id: "proj_stepwell",
+    story_revision_id: "srev_1",
+    settings_revision_id: "set_1",
+    bible: longBible,
+  });
+
+  assert.equal(tl.captions[0].hi_text, longHi);
+  assert.equal(tl.captions[0].en_text, longEn);
+  assert.ok(exportTimelineSrt(tl, "hi").includes(longHi));
+  assert.ok(exportTimelineSrt(tl, "en").includes(longEn));
 });

@@ -115,50 +115,62 @@ function StudioShell() {
   return (
     <div className="min-h-screen bg-[var(--kr-bg-0)] text-[var(--kr-ink)]">
       {/* Compact Sticky Mobile-First Header */}
-      <header className="sticky top-0 z-30 border-b border-white/10 bg-[var(--kr-bg-0)]/90 backdrop-blur-md">
-        <div className="mx-auto flex max-w-4xl items-center justify-between gap-2 px-3 py-2.5 sm:px-5">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-violet-600/20 text-violet-300 ring-1 ring-violet-400/30">
-              <Clapperboard className="h-5 w-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="truncate text-sm font-bold text-white sm:text-base">
-                  KathaRift Studio
-                </h1>
-                <span className="hidden items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 sm:inline-flex">
-                  <ShieldCheck className="h-3 w-3" /> $0 Zero-Spend
-                </span>
+      <header className="sticky top-0 z-30 border-b border-white/10 bg-[var(--kr-bg-0)]/95 backdrop-blur-md">
+        <div className="mx-auto flex max-w-4xl flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:px-5 sm:py-2.5">
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-violet-600/20 text-violet-300 ring-1 ring-violet-400/30">
+                <Clapperboard className="h-5 w-5" />
               </div>
-              {workspace && (
-                <p className="truncate text-[11px] text-[var(--kr-muted)]">
-                  Story v{workspace.storyRevision.version} · Timeline v{workspace.timeline.version}
-                </p>
-              )}
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h1 className="truncate text-sm font-bold text-white sm:text-base">
+                    KathaRift Studio
+                  </h1>
+                  <span className="hidden items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 sm:inline-flex">
+                    <ShieldCheck className="h-3 w-3" /> $0 Zero-Spend
+                  </span>
+                </div>
+                {workspace && (
+                  <p className="truncate text-[11px] text-[var(--kr-muted)]">
+                    Story v{workspace.storyRevision.version} · Timeline v{workspace.timeline.version}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Always visible on mobile right next to brand title */}
+            <div className="shrink-0 sm:hidden">
+              <UserButton />
             </div>
           </div>
 
-          <div className="flex items-center gap-1">
-            {(
-              [
-                { id: "canon", icon: BookOpen, label: "Canon" },
-                { id: "assets", icon: FolderOpen, label: "Assets" },
-                { id: "connections", icon: Link2, label: "Connections" },
-                { id: "activity", icon: Activity, label: "Activity" },
-                { id: "settings", icon: Settings, label: "Settings" },
-              ] as const
-            ).map(({ id, icon: Icon, label }) => (
-              <button
-                key={id}
-                type="button"
-                aria-label={label}
-                title={label}
-                onClick={() => setDrawer(id)}
-                className="kr-tap grid place-items-center rounded-xl border border-white/10 bg-white/5 px-2.5 text-slate-200 hover:border-violet-400/40 hover:text-white"
-              >
-                <Icon className="h-4 w-4" />
-              </button>
-            ))}
+          <div className="flex items-center justify-between gap-1 sm:justify-end">
+            <div className="grid w-full grid-cols-5 gap-1 sm:flex sm:w-auto sm:items-center">
+              {(
+                [
+                  { id: "canon", icon: BookOpen, label: "Canon" },
+                  { id: "assets", icon: FolderOpen, label: "Assets" },
+                  { id: "connections", icon: Link2, label: "Connections" },
+                  { id: "activity", icon: Activity, label: "Activity" },
+                  { id: "settings", icon: Settings, label: "Settings" },
+                ] as const
+              ).map(({ id, icon: Icon, label }) => (
+                <button
+                  key={id}
+                  type="button"
+                  aria-label={label}
+                  title={label}
+                  onClick={() => setDrawer(id)}
+                  className="kr-tap flex flex-col items-center justify-center gap-0.5 rounded-xl border border-white/10 bg-white/5 px-1.5 py-1 text-slate-200 hover:border-violet-400/40 hover:text-white sm:grid sm:place-items-center sm:px-2.5 sm:py-0"
+                >
+                  <Icon className="h-4 w-4" />
+                  <span className="text-[10px] leading-none text-[var(--kr-muted)] sm:hidden">
+                    {label}
+                  </span>
+                </button>
+              ))}
+            </div>
             <div className="hidden pl-1 sm:block">
               <UserButton />
             </div>

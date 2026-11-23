@@ -22,7 +22,7 @@
     "preview:stop": "node scripts/preview.mjs stop",
     "typecheck": "tsc --noEmit",
     "check:auth": "node scripts/check-auth-invariant.mjs",
-    "test": "node --experimental-strip-types --test src/packages/*/*.test.ts src/server/katharift/*.test.ts src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/lib/preview-path-prefix.test.ts && node --test scripts/browser-smoke-verdict.test.mjs scripts/check-auth-invariant.test.mjs scripts/migration-plan.test.mjs scripts/preview.test.mjs scripts/sign-out-plan.test.mjs",
+    "test": "node --experimental-strip-types --test src/packages/*/*.test.ts src/server/katharift/*.test.ts src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/lib/auth/user-profile-display.test.ts src/lib/preview-path-prefix.test.ts && node --test scripts/browser-smoke-verdict.test.mjs scripts/check-auth-invariant.test.mjs scripts/migration-plan.test.mjs scripts/preview.test.mjs scripts/sign-out-plan.test.mjs",
     "test:python": "python3 -m unittest discover -s worker/tests -p 'test_*.py'",
     "lint": "eslint .",
     "format": "prettier --write ."
