@@ -1,5 +1,5 @@
 import { DatabaseConfigurationError } from "../../lib/db-policy.ts";
-import { AuthConfigurationError } from "./auth-policy.ts";
+import { AuthConfigurationError, OwnerForbiddenError } from "./auth-policy.ts";
 
 export class ProjectNotFoundError extends Error {
   readonly status = 404;
@@ -26,7 +26,7 @@ export function krErrorResponse(
       { status: err.status },
     );
   }
-  if (err instanceof AuthConfigurationError) {
+  if (err instanceof AuthConfigurationError || err instanceof OwnerForbiddenError) {
     return Response.json(
       {
         error: err.message,
