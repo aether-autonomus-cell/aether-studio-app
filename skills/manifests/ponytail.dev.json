@@ -1,0 +1,22 @@
+{
+  "schema_version": "kr.skill.manifest.v1",
+  "skill_id": "ponytail.dev",
+  "name": "Ponytail Coding Discipline Skill",
+  "kind": "development",
+  "source_repo": "https://github.com/DietrichGebert/ponytail",
+  "source_commit": "ebd8654c2c627f721eb8f9c0d1bd4090a29f9e10",
+  "spdx_license": "MIT",
+  "licence_state": "approved",
+  "runtime": "dev.agent",
+  "profiles": [
+    "dev"
+  ],
+  "adapter": null,
+  "tools": [],
+  "instruction_files": [],
+  "entrypoint_files": [],
+  "prerequisites": [
+    "dev_coding_environment_only"
+  ],
+  "notes": "Development-agent workflow discipline only. Explicitly isolated from production Story/Director AI (no repo mutation or shell tools in app)."
+}

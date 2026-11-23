@@ -1,0 +1,244 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+
+export type SkillStatus =
+  | "ready"
+  | "waiting_worker"
+  | "blocked_licence"
+  | "unavailable_incompatible"
+  | "dev_only_not_production"
+  | "broken";
+
+export interface LockedFileEntry {
+  path: string;
+  upstream_path: string;
+  sha256: string;
+  bytes: number;
+}
+
+export interface LockedSkillEntry {
+  skill_id: string;
+  name: string;
+  kind: string;
+  source_repo: string;
+  source_commit: string;
+  tarball_sha256: string | null;
+  spdx_license: string;
+  licence_state: string;
+  runtime: string;
+  profiles: string[];
+  adapter: string | null;
+  tools: string[];
+  instruction_files: LockedFileEntry[];
+  entrypoint_files: LockedFileEntry[];
+  prerequisites: string[];
+  initial_status: SkillStatus;
+  notes: string;
+}
+
+export interface SkillsLockDocument {
+  schema_version: "kr.skills.lock.v1";
+  generated_at: string;
+  skills: LockedSkillEntry[];
+}
+
+export interface SkillRuntimeRecord {
+  skill_id: string;
+  name: string;
+  kind: string;
+  runtime: string;
+  profiles: string[];
+  spdx_license: string;
+  licence_state: string;
+  source_repo: string;
+  source_commit: string;
+  adapter: string | null;
+  tools: string[];
+  status: SkillStatus;
+  verified_files: number;
+  total_files: number;
+  missing_files: string[];
+  hash_mismatches: Array<{ path: string; expected: string; actual: string }>;
+  notes: string;
+}
+
+export interface SkillRegistryReport {
+  schema_version: "kr.skills.status.v1";
+  checked_at: string;
+  worker_active: boolean;
+  summary: {
+    total: number;
+    ready: number;
+    waiting_worker: number;
+    blocked_licence: number;
+    unavailable_incompatible: number;
+    dev_only_not_production: number;
+    broken: number;
+  };
+  skills: SkillRuntimeRecord[];
+}
+
+let cachedLock: SkillsLockDocument | null = null;
+
+function resolveRepoRoot(): string {
+  return process.cwd();
+}
+
+export function loadSkillsLock(): SkillsLockDocument {
+  if (cachedLock) return cachedLock;
+  const lockPath = path.join(resolveRepoRoot(), "skills.lock.json");
+  const raw = fs.readFileSync(lockPath, "utf8");
+  cachedLock = JSON.parse(raw) as SkillsLockDocument;
+  return cachedLock;
+}
+
+function sha256File(absPath: string): string {
+  const buf = fs.readFileSync(absPath);
+  return crypto.createHash("sha256").update(buf).digest("hex");
+}
+
+export function evaluateSkillRegistry(opts?: {
+  verifyHashes?: boolean;
+  workerActive?: boolean;
+}): SkillRegistryReport {
+  const verifyHashes = opts?.verifyHashes ?? true;
+  const workerActive = opts?.workerActive ?? process.env.KR_WORKER_ACTIVE === "1";
+  const root = resolveRepoRoot();
+  const lock = loadSkillsLock();
+
+  const records: SkillRuntimeRecord[] = lock.skills.map((skill) => {
+    // Hard license gate: CC-BY-NC-4.0 or any non-approved license is NEVER executable or loadable.
+    if (skill.licence_state !== "approved" || skill.spdx_license.includes("NC")) {
+      return {
+        skill_id: skill.skill_id,
+        name: skill.name,
+        kind: skill.kind,
+        runtime: skill.runtime,
+        profiles: skill.profiles,
+        spdx_license: skill.spdx_license,
+        licence_state: skill.licence_state,
+        source_repo: skill.source_repo,
+        source_commit: skill.source_commit,
+        adapter: skill.adapter,
+        tools: [],
+        status: "blocked_licence",
+        verified_files: 0,
+        total_files: 0,
+        missing_files: [],
+        hash_mismatches: [],
+        notes: skill.notes,
+      };
+    }
+
+    if (skill.initial_status === "unavailable_incompatible") {
+      return {
+        skill_id: skill.skill_id,
+        name: skill.name,
+        kind: skill.kind,
+        runtime: skill.runtime,
+        profiles: skill.profiles,
+        spdx_license: skill.spdx_license,
+        licence_state: skill.licence_state,
+        source_repo: skill.source_repo,
+        source_commit: skill.source_commit,
+        adapter: skill.adapter,
+        tools: [],
+        status: "unavailable_incompatible",
+        verified_files: 0,
+        total_files: 0,
+        missing_files: [],
+        hash_mismatches: [],
+        notes: skill.notes,
+      };
+    }
+
+    if (skill.initial_status === "dev_only_not_production") {
+      return {
+        skill_id: skill.skill_id,
+        name: skill.name,
+        kind: skill.kind,
+        runtime: skill.runtime,
+        profiles: skill.profiles,
+        spdx_license: skill.spdx_license,
+        licence_state: skill.licence_state,
+        source_repo: skill.source_repo,
+        source_commit: skill.source_commit,
+        adapter: skill.adapter,
+        tools: [],
+        status: "dev_only_not_production",
+        verified_files: 0,
+        total_files: 0,
+        missing_files: [],
+        hash_mismatches: [],
+        notes: skill.notes,
+      };
+    }
+
+    const allFiles = [...skill.instruction_files, ...skill.entrypoint_files];
+    const missingFiles: string[] = [];
+    const hashMismatches: Array<{ path: string; expected: string; actual: string }> = [];
+    let verified = 0;
+
+    for (const file of allFiles) {
+      const abs = path.join(root, file.path);
+      if (!fs.existsSync(abs)) {
+        missingFiles.push(file.path);
+        continue;
+      }
+      if (verifyHashes) {
+        const actual = sha256File(abs);
+        if (actual !== file.sha256) {
+          hashMismatches.push({ path: file.path, expected: file.sha256, actual });
+          continue;
+        }
+      }
+      verified += 1;
+    }
+
+    let status: SkillStatus = skill.initial_status;
+    if (missingFiles.length > 0 || hashMismatches.length > 0) {
+      status = "broken";
+    } else if (skill.runtime.startsWith("worker.")) {
+      status = workerActive ? "ready" : "waiting_worker";
+    } else if (skill.runtime === "app.server") {
+      status = "ready";
+    }
+
+    return {
+      skill_id: skill.skill_id,
+      name: skill.name,
+      kind: skill.kind,
+      runtime: skill.runtime,
+      profiles: skill.profiles,
+      spdx_license: skill.spdx_license,
+      licence_state: skill.licence_state,
+      source_repo: skill.source_repo,
+      source_commit: skill.source_commit,
+      adapter: skill.adapter,
+      tools: skill.tools,
+      status,
+      verified_files: verified,
+      total_files: allFiles.length,
+      missing_files: missingFiles,
+      hash_mismatches: hashMismatches,
+      notes: skill.notes,
+    };
+  });
+
+  return {
+    schema_version: "kr.skills.status.v1",
+    checked_at: new Date().toISOString(),
+    worker_active: workerActive,
+    summary: {
+      total: records.length,
+      ready: records.filter((r) => r.status === "ready").length,
+      waiting_worker: records.filter((r) => r.status === "waiting_worker").length,
+      blocked_licence: records.filter((r) => r.status === "blocked_licence").length,
+      unavailable_incompatible: records.filter((r) => r.status === "unavailable_incompatible").length,
+      dev_only_not_production: records.filter((r) => r.status === "dev_only_not_production").length,
+      broken: records.filter((r) => r.status === "broken").length,
+    },
+    skills: records,
+  };
+}

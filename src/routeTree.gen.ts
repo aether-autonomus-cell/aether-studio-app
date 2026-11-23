@@ -10,195 +10,206 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as Api2dGenerateRouteImport } from './routes/api/2d/generate'
-import { Route as Api2dStatusRouteImport } from './routes/api/2d/status'
-import { Route as Api2dJobsIndexRouteImport } from './routes/api/2d/jobs/index'
-import { Route as Api2dWorkerClaimRouteImport } from './routes/api/2d/worker/claim'
-import { Route as Api2dWorkerCompleteRouteImport } from './routes/api/2d/worker/complete'
-import { Route as Api2dWorkerHeartbeatRouteImport } from './routes/api/2d/worker/heartbeat'
-import { Route as Api2dJobsJobIdIndexRouteImport } from './routes/api/2d/jobs/$jobId/index'
-import { Route as Api2dJobsJobIdCancelRouteImport } from './routes/api/2d/jobs/$jobId/cancel'
-import { Route as Api2dJobsJobIdPairRouteImport } from './routes/api/2d/jobs/$jobId/pair'
-import { Route as Api2dJobsJobIdPublishIntentsRouteImport } from './routes/api/2d/jobs/$jobId/publish-intents'
-import { Route as Api2dOauthGoogleCallbackRouteImport } from './routes/api/2d/oauth/google/callback'
-import { Route as Api2dOauthGoogleStartRouteImport } from './routes/api/2d/oauth/google/start'
+import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiKrConnectionsRouteImport } from './routes/api/kr/connections'
+import { Route as ApiKrExportsRouteImport } from './routes/api/kr/exports'
+import { Route as ApiKrSettingsRouteImport } from './routes/api/kr/settings'
+import { Route as ApiKrWorkspaceRouteImport } from './routes/api/kr/workspace'
+import { Route as ApiKrJobsConfirmRouteImport } from './routes/api/kr/jobs/confirm'
+import { Route as ApiKrJobsPairRouteImport } from './routes/api/kr/jobs/pair'
+import { Route as ApiKrSkillsRunRouteImport } from './routes/api/kr/skills/run'
+import { Route as ApiKrStoryPatchRouteImport } from './routes/api/kr/story/patch'
+import { Route as ApiKrStoryProposeRouteImport } from './routes/api/kr/story/propose'
+import { Route as ApiKrTimelineEditRouteImport } from './routes/api/kr/timeline/edit'
+import { Route as ApiKrWorkerCheckpointRouteImport } from './routes/api/kr/worker/checkpoint'
+import { Route as ApiKrWorkerClaimRouteImport } from './routes/api/kr/worker/claim'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const Api2dGenerateRoute = Api2dGenerateRouteImport.update({
-  id: '/api/2d/generate',
-  path: '/api/2d/generate',
+const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
+  id: '/api/auth/$',
+  path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const Api2dStatusRoute = Api2dStatusRouteImport.update({
-  id: '/api/2d/status',
-  path: '/api/2d/status',
+const ApiKrConnectionsRoute = ApiKrConnectionsRouteImport.update({
+  id: '/api/kr/connections',
+  path: '/api/kr/connections',
   getParentRoute: () => rootRouteImport,
 } as any)
-const Api2dJobsIndexRoute = Api2dJobsIndexRouteImport.update({
-  id: '/api/2d/jobs/',
-  path: '/api/2d/jobs/',
+const ApiKrExportsRoute = ApiKrExportsRouteImport.update({
+  id: '/api/kr/exports',
+  path: '/api/kr/exports',
   getParentRoute: () => rootRouteImport,
 } as any)
-const Api2dWorkerClaimRoute = Api2dWorkerClaimRouteImport.update({
-  id: '/api/2d/worker/claim',
-  path: '/api/2d/worker/claim',
+const ApiKrSettingsRoute = ApiKrSettingsRouteImport.update({
+  id: '/api/kr/settings',
+  path: '/api/kr/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
-const Api2dWorkerCompleteRoute = Api2dWorkerCompleteRouteImport.update({
-  id: '/api/2d/worker/complete',
-  path: '/api/2d/worker/complete',
+const ApiKrWorkspaceRoute = ApiKrWorkspaceRouteImport.update({
+  id: '/api/kr/workspace',
+  path: '/api/kr/workspace',
   getParentRoute: () => rootRouteImport,
 } as any)
-const Api2dWorkerHeartbeatRoute = Api2dWorkerHeartbeatRouteImport.update({
-  id: '/api/2d/worker/heartbeat',
-  path: '/api/2d/worker/heartbeat',
+const ApiKrJobsConfirmRoute = ApiKrJobsConfirmRouteImport.update({
+  id: '/api/kr/jobs/confirm',
+  path: '/api/kr/jobs/confirm',
   getParentRoute: () => rootRouteImport,
 } as any)
-const Api2dJobsJobIdIndexRoute = Api2dJobsJobIdIndexRouteImport.update({
-  id: '/api/2d/jobs/$jobId/',
-  path: '/api/2d/jobs/$jobId/',
+const ApiKrJobsPairRoute = ApiKrJobsPairRouteImport.update({
+  id: '/api/kr/jobs/pair',
+  path: '/api/kr/jobs/pair',
   getParentRoute: () => rootRouteImport,
 } as any)
-const Api2dJobsJobIdCancelRoute = Api2dJobsJobIdCancelRouteImport.update({
-  id: '/api/2d/jobs/$jobId/cancel',
-  path: '/api/2d/jobs/$jobId/cancel',
+const ApiKrSkillsRunRoute = ApiKrSkillsRunRouteImport.update({
+  id: '/api/kr/skills/run',
+  path: '/api/kr/skills/run',
   getParentRoute: () => rootRouteImport,
 } as any)
-const Api2dJobsJobIdPairRoute = Api2dJobsJobIdPairRouteImport.update({
-  id: '/api/2d/jobs/$jobId/pair',
-  path: '/api/2d/jobs/$jobId/pair',
+const ApiKrStoryPatchRoute = ApiKrStoryPatchRouteImport.update({
+  id: '/api/kr/story/patch',
+  path: '/api/kr/story/patch',
   getParentRoute: () => rootRouteImport,
 } as any)
-const Api2dJobsJobIdPublishIntentsRoute =
-  Api2dJobsJobIdPublishIntentsRouteImport.update({
-    id: '/api/2d/jobs/$jobId/publish-intents',
-    path: '/api/2d/jobs/$jobId/publish-intents',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const Api2dOauthGoogleCallbackRoute =
-  Api2dOauthGoogleCallbackRouteImport.update({
-    id: '/api/2d/oauth/google/callback',
-    path: '/api/2d/oauth/google/callback',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const Api2dOauthGoogleStartRoute = Api2dOauthGoogleStartRouteImport.update({
-  id: '/api/2d/oauth/google/start',
-  path: '/api/2d/oauth/google/start',
+const ApiKrStoryProposeRoute = ApiKrStoryProposeRouteImport.update({
+  id: '/api/kr/story/propose',
+  path: '/api/kr/story/propose',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiKrTimelineEditRoute = ApiKrTimelineEditRouteImport.update({
+  id: '/api/kr/timeline/edit',
+  path: '/api/kr/timeline/edit',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiKrWorkerCheckpointRoute = ApiKrWorkerCheckpointRouteImport.update({
+  id: '/api/kr/worker/checkpoint',
+  path: '/api/kr/worker/checkpoint',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiKrWorkerClaimRoute = ApiKrWorkerClaimRouteImport.update({
+  id: '/api/kr/worker/claim',
+  path: '/api/kr/worker/claim',
   getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/api/2d/generate': typeof Api2dGenerateRoute
-  '/api/2d/status': typeof Api2dStatusRoute
-  '/api/2d/worker/claim': typeof Api2dWorkerClaimRoute
-  '/api/2d/worker/complete': typeof Api2dWorkerCompleteRoute
-  '/api/2d/worker/heartbeat': typeof Api2dWorkerHeartbeatRoute
-  '/api/2d/jobs/': typeof Api2dJobsIndexRoute
-  '/api/2d/jobs/$jobId/cancel': typeof Api2dJobsJobIdCancelRoute
-  '/api/2d/jobs/$jobId/pair': typeof Api2dJobsJobIdPairRoute
-  '/api/2d/jobs/$jobId/publish-intents': typeof Api2dJobsJobIdPublishIntentsRoute
-  '/api/2d/oauth/google/callback': typeof Api2dOauthGoogleCallbackRoute
-  '/api/2d/oauth/google/start': typeof Api2dOauthGoogleStartRoute
-  '/api/2d/jobs/$jobId/': typeof Api2dJobsJobIdIndexRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/kr/connections': typeof ApiKrConnectionsRoute
+  '/api/kr/exports': typeof ApiKrExportsRoute
+  '/api/kr/settings': typeof ApiKrSettingsRoute
+  '/api/kr/workspace': typeof ApiKrWorkspaceRoute
+  '/api/kr/jobs/confirm': typeof ApiKrJobsConfirmRoute
+  '/api/kr/jobs/pair': typeof ApiKrJobsPairRoute
+  '/api/kr/skills/run': typeof ApiKrSkillsRunRoute
+  '/api/kr/story/patch': typeof ApiKrStoryPatchRoute
+  '/api/kr/story/propose': typeof ApiKrStoryProposeRoute
+  '/api/kr/timeline/edit': typeof ApiKrTimelineEditRoute
+  '/api/kr/worker/checkpoint': typeof ApiKrWorkerCheckpointRoute
+  '/api/kr/worker/claim': typeof ApiKrWorkerClaimRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/api/2d/generate': typeof Api2dGenerateRoute
-  '/api/2d/status': typeof Api2dStatusRoute
-  '/api/2d/worker/claim': typeof Api2dWorkerClaimRoute
-  '/api/2d/worker/complete': typeof Api2dWorkerCompleteRoute
-  '/api/2d/worker/heartbeat': typeof Api2dWorkerHeartbeatRoute
-  '/api/2d/jobs': typeof Api2dJobsIndexRoute
-  '/api/2d/jobs/$jobId/cancel': typeof Api2dJobsJobIdCancelRoute
-  '/api/2d/jobs/$jobId/pair': typeof Api2dJobsJobIdPairRoute
-  '/api/2d/jobs/$jobId/publish-intents': typeof Api2dJobsJobIdPublishIntentsRoute
-  '/api/2d/oauth/google/callback': typeof Api2dOauthGoogleCallbackRoute
-  '/api/2d/oauth/google/start': typeof Api2dOauthGoogleStartRoute
-  '/api/2d/jobs/$jobId': typeof Api2dJobsJobIdIndexRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/kr/connections': typeof ApiKrConnectionsRoute
+  '/api/kr/exports': typeof ApiKrExportsRoute
+  '/api/kr/settings': typeof ApiKrSettingsRoute
+  '/api/kr/workspace': typeof ApiKrWorkspaceRoute
+  '/api/kr/jobs/confirm': typeof ApiKrJobsConfirmRoute
+  '/api/kr/jobs/pair': typeof ApiKrJobsPairRoute
+  '/api/kr/skills/run': typeof ApiKrSkillsRunRoute
+  '/api/kr/story/patch': typeof ApiKrStoryPatchRoute
+  '/api/kr/story/propose': typeof ApiKrStoryProposeRoute
+  '/api/kr/timeline/edit': typeof ApiKrTimelineEditRoute
+  '/api/kr/worker/checkpoint': typeof ApiKrWorkerCheckpointRoute
+  '/api/kr/worker/claim': typeof ApiKrWorkerClaimRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/api/2d/generate': typeof Api2dGenerateRoute
-  '/api/2d/status': typeof Api2dStatusRoute
-  '/api/2d/worker/claim': typeof Api2dWorkerClaimRoute
-  '/api/2d/worker/complete': typeof Api2dWorkerCompleteRoute
-  '/api/2d/worker/heartbeat': typeof Api2dWorkerHeartbeatRoute
-  '/api/2d/jobs/': typeof Api2dJobsIndexRoute
-  '/api/2d/jobs/$jobId/cancel': typeof Api2dJobsJobIdCancelRoute
-  '/api/2d/jobs/$jobId/pair': typeof Api2dJobsJobIdPairRoute
-  '/api/2d/jobs/$jobId/publish-intents': typeof Api2dJobsJobIdPublishIntentsRoute
-  '/api/2d/oauth/google/callback': typeof Api2dOauthGoogleCallbackRoute
-  '/api/2d/oauth/google/start': typeof Api2dOauthGoogleStartRoute
-  '/api/2d/jobs/$jobId/': typeof Api2dJobsJobIdIndexRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/kr/connections': typeof ApiKrConnectionsRoute
+  '/api/kr/exports': typeof ApiKrExportsRoute
+  '/api/kr/settings': typeof ApiKrSettingsRoute
+  '/api/kr/workspace': typeof ApiKrWorkspaceRoute
+  '/api/kr/jobs/confirm': typeof ApiKrJobsConfirmRoute
+  '/api/kr/jobs/pair': typeof ApiKrJobsPairRoute
+  '/api/kr/skills/run': typeof ApiKrSkillsRunRoute
+  '/api/kr/story/patch': typeof ApiKrStoryPatchRoute
+  '/api/kr/story/propose': typeof ApiKrStoryProposeRoute
+  '/api/kr/timeline/edit': typeof ApiKrTimelineEditRoute
+  '/api/kr/worker/checkpoint': typeof ApiKrWorkerCheckpointRoute
+  '/api/kr/worker/claim': typeof ApiKrWorkerClaimRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/api/2d/generate'
-    | '/api/2d/status'
-    | '/api/2d/worker/claim'
-    | '/api/2d/worker/complete'
-    | '/api/2d/worker/heartbeat'
-    | '/api/2d/jobs/'
-    | '/api/2d/jobs/$jobId/cancel'
-    | '/api/2d/jobs/$jobId/pair'
-    | '/api/2d/jobs/$jobId/publish-intents'
-    | '/api/2d/oauth/google/callback'
-    | '/api/2d/oauth/google/start'
-    | '/api/2d/jobs/$jobId/'
+    | '/api/auth/$'
+    | '/api/kr/connections'
+    | '/api/kr/exports'
+    | '/api/kr/settings'
+    | '/api/kr/workspace'
+    | '/api/kr/jobs/confirm'
+    | '/api/kr/jobs/pair'
+    | '/api/kr/skills/run'
+    | '/api/kr/story/patch'
+    | '/api/kr/story/propose'
+    | '/api/kr/timeline/edit'
+    | '/api/kr/worker/checkpoint'
+    | '/api/kr/worker/claim'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/api/2d/generate'
-    | '/api/2d/status'
-    | '/api/2d/worker/claim'
-    | '/api/2d/worker/complete'
-    | '/api/2d/worker/heartbeat'
-    | '/api/2d/jobs'
-    | '/api/2d/jobs/$jobId/cancel'
-    | '/api/2d/jobs/$jobId/pair'
-    | '/api/2d/jobs/$jobId/publish-intents'
-    | '/api/2d/oauth/google/callback'
-    | '/api/2d/oauth/google/start'
-    | '/api/2d/jobs/$jobId'
+    | '/api/auth/$'
+    | '/api/kr/connections'
+    | '/api/kr/exports'
+    | '/api/kr/settings'
+    | '/api/kr/workspace'
+    | '/api/kr/jobs/confirm'
+    | '/api/kr/jobs/pair'
+    | '/api/kr/skills/run'
+    | '/api/kr/story/patch'
+    | '/api/kr/story/propose'
+    | '/api/kr/timeline/edit'
+    | '/api/kr/worker/checkpoint'
+    | '/api/kr/worker/claim'
   id:
     | '__root__'
     | '/'
-    | '/api/2d/generate'
-    | '/api/2d/status'
-    | '/api/2d/worker/claim'
-    | '/api/2d/worker/complete'
-    | '/api/2d/worker/heartbeat'
-    | '/api/2d/jobs/'
-    | '/api/2d/jobs/$jobId/cancel'
-    | '/api/2d/jobs/$jobId/pair'
-    | '/api/2d/jobs/$jobId/publish-intents'
-    | '/api/2d/oauth/google/callback'
-    | '/api/2d/oauth/google/start'
-    | '/api/2d/jobs/$jobId/'
+    | '/api/auth/$'
+    | '/api/kr/connections'
+    | '/api/kr/exports'
+    | '/api/kr/settings'
+    | '/api/kr/workspace'
+    | '/api/kr/jobs/confirm'
+    | '/api/kr/jobs/pair'
+    | '/api/kr/skills/run'
+    | '/api/kr/story/patch'
+    | '/api/kr/story/propose'
+    | '/api/kr/timeline/edit'
+    | '/api/kr/worker/checkpoint'
+    | '/api/kr/worker/claim'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  Api2dGenerateRoute: typeof Api2dGenerateRoute
-  Api2dStatusRoute: typeof Api2dStatusRoute
-  Api2dWorkerClaimRoute: typeof Api2dWorkerClaimRoute
-  Api2dWorkerCompleteRoute: typeof Api2dWorkerCompleteRoute
-  Api2dWorkerHeartbeatRoute: typeof Api2dWorkerHeartbeatRoute
-  Api2dJobsIndexRoute: typeof Api2dJobsIndexRoute
-  Api2dJobsJobIdCancelRoute: typeof Api2dJobsJobIdCancelRoute
-  Api2dJobsJobIdPairRoute: typeof Api2dJobsJobIdPairRoute
-  Api2dJobsJobIdPublishIntentsRoute: typeof Api2dJobsJobIdPublishIntentsRoute
-  Api2dOauthGoogleCallbackRoute: typeof Api2dOauthGoogleCallbackRoute
-  Api2dOauthGoogleStartRoute: typeof Api2dOauthGoogleStartRoute
-  Api2dJobsJobIdIndexRoute: typeof Api2dJobsJobIdIndexRoute
+  ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiKrConnectionsRoute: typeof ApiKrConnectionsRoute
+  ApiKrExportsRoute: typeof ApiKrExportsRoute
+  ApiKrSettingsRoute: typeof ApiKrSettingsRoute
+  ApiKrWorkspaceRoute: typeof ApiKrWorkspaceRoute
+  ApiKrJobsConfirmRoute: typeof ApiKrJobsConfirmRoute
+  ApiKrJobsPairRoute: typeof ApiKrJobsPairRoute
+  ApiKrSkillsRunRoute: typeof ApiKrSkillsRunRoute
+  ApiKrStoryPatchRoute: typeof ApiKrStoryPatchRoute
+  ApiKrStoryProposeRoute: typeof ApiKrStoryProposeRoute
+  ApiKrTimelineEditRoute: typeof ApiKrTimelineEditRoute
+  ApiKrWorkerCheckpointRoute: typeof ApiKrWorkerCheckpointRoute
+  ApiKrWorkerClaimRoute: typeof ApiKrWorkerClaimRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -210,88 +221,95 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/2d/generate': {
-      id: '/api/2d/generate'
-      path: '/api/2d/generate'
-      fullPath: '/api/2d/generate'
-      preLoaderRoute: typeof Api2dGenerateRouteImport
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/2d/status': {
-      id: '/api/2d/status'
-      path: '/api/2d/status'
-      fullPath: '/api/2d/status'
-      preLoaderRoute: typeof Api2dStatusRouteImport
+    '/api/kr/connections': {
+      id: '/api/kr/connections'
+      path: '/api/kr/connections'
+      fullPath: '/api/kr/connections'
+      preLoaderRoute: typeof ApiKrConnectionsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/2d/jobs/': {
-      id: '/api/2d/jobs/'
-      path: '/api/2d/jobs'
-      fullPath: '/api/2d/jobs/'
-      preLoaderRoute: typeof Api2dJobsIndexRouteImport
+    '/api/kr/exports': {
+      id: '/api/kr/exports'
+      path: '/api/kr/exports'
+      fullPath: '/api/kr/exports'
+      preLoaderRoute: typeof ApiKrExportsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/2d/worker/claim': {
-      id: '/api/2d/worker/claim'
-      path: '/api/2d/worker/claim'
-      fullPath: '/api/2d/worker/claim'
-      preLoaderRoute: typeof Api2dWorkerClaimRouteImport
+    '/api/kr/settings': {
+      id: '/api/kr/settings'
+      path: '/api/kr/settings'
+      fullPath: '/api/kr/settings'
+      preLoaderRoute: typeof ApiKrSettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/2d/worker/complete': {
-      id: '/api/2d/worker/complete'
-      path: '/api/2d/worker/complete'
-      fullPath: '/api/2d/worker/complete'
-      preLoaderRoute: typeof Api2dWorkerCompleteRouteImport
+    '/api/kr/workspace': {
+      id: '/api/kr/workspace'
+      path: '/api/kr/workspace'
+      fullPath: '/api/kr/workspace'
+      preLoaderRoute: typeof ApiKrWorkspaceRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/2d/worker/heartbeat': {
-      id: '/api/2d/worker/heartbeat'
-      path: '/api/2d/worker/heartbeat'
-      fullPath: '/api/2d/worker/heartbeat'
-      preLoaderRoute: typeof Api2dWorkerHeartbeatRouteImport
+    '/api/kr/jobs/confirm': {
+      id: '/api/kr/jobs/confirm'
+      path: '/api/kr/jobs/confirm'
+      fullPath: '/api/kr/jobs/confirm'
+      preLoaderRoute: typeof ApiKrJobsConfirmRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/2d/jobs/$jobId/': {
-      id: '/api/2d/jobs/$jobId/'
-      path: '/api/2d/jobs/$jobId'
-      fullPath: '/api/2d/jobs/$jobId/'
-      preLoaderRoute: typeof Api2dJobsJobIdIndexRouteImport
+    '/api/kr/jobs/pair': {
+      id: '/api/kr/jobs/pair'
+      path: '/api/kr/jobs/pair'
+      fullPath: '/api/kr/jobs/pair'
+      preLoaderRoute: typeof ApiKrJobsPairRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/2d/jobs/$jobId/cancel': {
-      id: '/api/2d/jobs/$jobId/cancel'
-      path: '/api/2d/jobs/$jobId/cancel'
-      fullPath: '/api/2d/jobs/$jobId/cancel'
-      preLoaderRoute: typeof Api2dJobsJobIdCancelRouteImport
+    '/api/kr/skills/run': {
+      id: '/api/kr/skills/run'
+      path: '/api/kr/skills/run'
+      fullPath: '/api/kr/skills/run'
+      preLoaderRoute: typeof ApiKrSkillsRunRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/2d/jobs/$jobId/pair': {
-      id: '/api/2d/jobs/$jobId/pair'
-      path: '/api/2d/jobs/$jobId/pair'
-      fullPath: '/api/2d/jobs/$jobId/pair'
-      preLoaderRoute: typeof Api2dJobsJobIdPairRouteImport
+    '/api/kr/story/patch': {
+      id: '/api/kr/story/patch'
+      path: '/api/kr/story/patch'
+      fullPath: '/api/kr/story/patch'
+      preLoaderRoute: typeof ApiKrStoryPatchRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/2d/jobs/$jobId/publish-intents': {
-      id: '/api/2d/jobs/$jobId/publish-intents'
-      path: '/api/2d/jobs/$jobId/publish-intents'
-      fullPath: '/api/2d/jobs/$jobId/publish-intents'
-      preLoaderRoute: typeof Api2dJobsJobIdPublishIntentsRouteImport
+    '/api/kr/story/propose': {
+      id: '/api/kr/story/propose'
+      path: '/api/kr/story/propose'
+      fullPath: '/api/kr/story/propose'
+      preLoaderRoute: typeof ApiKrStoryProposeRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/2d/oauth/google/callback': {
-      id: '/api/2d/oauth/google/callback'
-      path: '/api/2d/oauth/google/callback'
-      fullPath: '/api/2d/oauth/google/callback'
-      preLoaderRoute: typeof Api2dOauthGoogleCallbackRouteImport
+    '/api/kr/timeline/edit': {
+      id: '/api/kr/timeline/edit'
+      path: '/api/kr/timeline/edit'
+      fullPath: '/api/kr/timeline/edit'
+      preLoaderRoute: typeof ApiKrTimelineEditRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/2d/oauth/google/start': {
-      id: '/api/2d/oauth/google/start'
-      path: '/api/2d/oauth/google/start'
-      fullPath: '/api/2d/oauth/google/start'
-      preLoaderRoute: typeof Api2dOauthGoogleStartRouteImport
+    '/api/kr/worker/checkpoint': {
+      id: '/api/kr/worker/checkpoint'
+      path: '/api/kr/worker/checkpoint'
+      fullPath: '/api/kr/worker/checkpoint'
+      preLoaderRoute: typeof ApiKrWorkerCheckpointRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/kr/worker/claim': {
+      id: '/api/kr/worker/claim'
+      path: '/api/kr/worker/claim'
+      fullPath: '/api/kr/worker/claim'
+      preLoaderRoute: typeof ApiKrWorkerClaimRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -299,18 +317,19 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  Api2dGenerateRoute: Api2dGenerateRoute,
-  Api2dStatusRoute: Api2dStatusRoute,
-  Api2dWorkerClaimRoute: Api2dWorkerClaimRoute,
-  Api2dWorkerCompleteRoute: Api2dWorkerCompleteRoute,
-  Api2dWorkerHeartbeatRoute: Api2dWorkerHeartbeatRoute,
-  Api2dJobsIndexRoute: Api2dJobsIndexRoute,
-  Api2dJobsJobIdCancelRoute: Api2dJobsJobIdCancelRoute,
-  Api2dJobsJobIdPairRoute: Api2dJobsJobIdPairRoute,
-  Api2dJobsJobIdPublishIntentsRoute: Api2dJobsJobIdPublishIntentsRoute,
-  Api2dOauthGoogleCallbackRoute: Api2dOauthGoogleCallbackRoute,
-  Api2dOauthGoogleStartRoute: Api2dOauthGoogleStartRoute,
-  Api2dJobsJobIdIndexRoute: Api2dJobsJobIdIndexRoute,
+  ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiKrConnectionsRoute: ApiKrConnectionsRoute,
+  ApiKrExportsRoute: ApiKrExportsRoute,
+  ApiKrSettingsRoute: ApiKrSettingsRoute,
+  ApiKrWorkspaceRoute: ApiKrWorkspaceRoute,
+  ApiKrJobsConfirmRoute: ApiKrJobsConfirmRoute,
+  ApiKrJobsPairRoute: ApiKrJobsPairRoute,
+  ApiKrSkillsRunRoute: ApiKrSkillsRunRoute,
+  ApiKrStoryPatchRoute: ApiKrStoryPatchRoute,
+  ApiKrStoryProposeRoute: ApiKrStoryProposeRoute,
+  ApiKrTimelineEditRoute: ApiKrTimelineEditRoute,
+  ApiKrWorkerCheckpointRoute: ApiKrWorkerCheckpointRoute,
+  ApiKrWorkerClaimRoute: ApiKrWorkerClaimRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

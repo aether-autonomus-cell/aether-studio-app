@@ -1,0 +1,226 @@
+{
+  "schema_version": "kr.skills.status.v1",
+  "profile": "app",
+  "checked_at": "2026-11-22T16:19:13.734Z",
+  "environment": {
+    "nodeVersion": "22.22.3",
+    "nodeMajor": 22,
+    "pythonVersion": "3.11",
+    "hasNumpyScipy": false,
+    "hasFfmpeg": false,
+    "hasActivePermittedWorker": false
+  },
+  "summary": {
+    "total": 9,
+    "ready": 2,
+    "waiting_worker": 4,
+    "blocked_licence": 1,
+    "unavailable_incompatible": 1,
+    "dev_only_not_production": 1,
+    "broken": 0
+  },
+  "skills": [
+    {
+      "skill_id": "hyperframes.compose",
+      "name": "HyperFrames Compositor & Motion Doctrine",
+      "kind": "renderer",
+      "runtime": "worker.render",
+      "profiles": [
+        "app",
+        "worker"
+      ],
+      "spdx_license": "Apache-2.0",
+      "licence_state": "approved",
+      "source_repo": "https://github.com/heygen-com/hyperframes",
+      "source_commit": "086948766477b8ae4c4fa1be0b4215a627e1062b",
+      "adapter": "kr_hyperframes_v1",
+      "tools": [
+        "compose_scene",
+        "hyperframes_align_captions"
+      ],
+      "status": "waiting_worker",
+      "verified_files": 6,
+      "total_files": 6,
+      "missing_files": [],
+      "hash_mismatches": [],
+      "notes": "Apache-2.0 instructions + Node 22 scripts provisioned in app/worker; full MP4 compose execution requires Colab/worker Node22 + FFmpeg runtime."
+    },
+    {
+      "skill_id": "cinematic.director",
+      "name": "Cinematic Skill Director & Beat/Mix Pack",
+      "kind": "hybrid",
+      "runtime": "app.server",
+      "profiles": [
+        "app",
+        "worker"
+      ],
+      "spdx_license": "MIT",
+      "licence_state": "approved",
+      "source_repo": "https://github.com/Moh4696/cinematic-skill",
+      "source_commit": "bf435561c6203f90f971300efe952b68b5ec3417",
+      "adapter": "kr_cinematic_v1",
+      "tools": [
+        "cinematic_lint_beats",
+        "plan_chapter"
+      ],
+      "status": "ready",
+      "verified_files": 11,
+      "total_files": 11,
+      "missing_files": [],
+      "hash_mismatches": [],
+      "notes": "MIT instructions loaded by Story/Director orchestrator; make_beats/captions/mix scripts provisioned for worker & local smoke validation."
+    },
+    {
+      "skill_id": "youtube.agent",
+      "name": "YouTube Agent Script/Edit/Package Skill",
+      "kind": "executable",
+      "runtime": "app.server",
+      "profiles": [
+        "app",
+        "worker"
+      ],
+      "spdx_license": "MIT",
+      "licence_state": "approved",
+      "source_repo": "https://github.com/Jakeschincariol/youtube-agent-skill",
+      "source_commit": "a2feb2104981a375ffd4f87ee04f4f5344ac43c6",
+      "adapter": "kr_youtube_skill_v1",
+      "tools": [
+        "youtube_score_hooks",
+        "youtube_detect_deadair",
+        "youtube_lint_title"
+      ],
+      "status": "ready",
+      "verified_files": 14,
+      "total_files": 14,
+      "missing_files": [],
+      "hash_mismatches": [],
+      "notes": "MIT packaging/hook/deadair analysis tools & instructions; no auto-publishing or analytics claim."
+    },
+    {
+      "skill_id": "moneyprinter.assembly",
+      "name": "MoneyPrinterTurbo Media Assembly Helpers",
+      "kind": "executable",
+      "runtime": "worker.media",
+      "profiles": [
+        "worker"
+      ],
+      "spdx_license": "MIT",
+      "licence_state": "approved",
+      "source_repo": "https://github.com/harry0703/MoneyPrinterTurbo",
+      "source_commit": "86e45a2233a72c41d83389ac5cb49bbf5f6a847d",
+      "adapter": "kr_mpt_assembly_v1",
+      "tools": [
+        "verify_media",
+        "prepare_export"
+      ],
+      "status": "waiting_worker",
+      "verified_files": 3,
+      "total_files": 3,
+      "missing_files": [],
+      "hash_mismatches": [],
+      "notes": "MIT subtitle/video effect helpers normalized behind KathaRift worker adapter; no stock-footage replacement or standalone UI."
+    },
+    {
+      "skill_id": "animation.base",
+      "name": "Claude Animation Base Timeline & Effects",
+      "kind": "renderer",
+      "runtime": "worker.render",
+      "profiles": [
+        "worker"
+      ],
+      "spdx_license": "MIT",
+      "licence_state": "approved",
+      "source_repo": "https://github.com/JohnHeibel/ClaudeAnimationBase",
+      "source_commit": "0ac8bf2b31942376cb6b8c4074715595d512acd2",
+      "adapter": "kr_anim_base_v1",
+      "tools": [
+        "compose_scene"
+      ],
+      "status": "waiting_worker",
+      "verified_files": 4,
+      "total_files": 4,
+      "missing_files": [],
+      "hash_mismatches": [],
+      "notes": "MIT deterministic easing/shot-wipe helpers for worker render profile; never replaces illustrated anime art with Clawd vectors."
+    },
+    {
+      "skill_id": "lemo.audio_sfx",
+      "name": "Lemo-Opuscar Procedural SFX (MIT Code Only)",
+      "kind": "executable",
+      "runtime": "worker.media",
+      "profiles": [
+        "worker"
+      ],
+      "spdx_license": "MIT",
+      "licence_state": "approved",
+      "source_repo": "https://github.com/lemomo-ai/lemo-opuscar",
+      "source_commit": "f9e204293930952b61ba921cd8944d05f121beee",
+      "adapter": "kr_lemo_sfx_v1",
+      "tools": [
+        "synthesize_sfx"
+      ],
+      "status": "waiting_worker",
+      "verified_files": 4,
+      "total_files": 4,
+      "missing_files": [],
+      "hash_mismatches": [],
+      "notes": "MIT procedural 48 kHz SFX synthesizer (whoosh, thump, rumble, crash) verified from REUSE.toml."
+    },
+    {
+      "skill_id": "lemo.style_docs",
+      "name": "Lemo-Opuscar Style Guides & Prompts",
+      "kind": "instruction",
+      "runtime": "app.server",
+      "profiles": [],
+      "spdx_license": "CC-BY-NC-4.0",
+      "licence_state": "blocked_non_commercial",
+      "source_repo": "https://github.com/lemomo-ai/lemo-opuscar",
+      "source_commit": "f9e204293930952b61ba921cd8944d05f121beee",
+      "adapter": null,
+      "tools": [],
+      "status": "blocked_licence",
+      "verified_files": 0,
+      "missing_files": [],
+      "hash_mismatches": [],
+      "notes": "EXCLUDED BY LICENSE GATE: Lemo-Opuscar *.md and style prompts are CC-BY-NC-4.0 (Non-Commercial). Never vendored or loaded into commercial/YouTube workflows."
+    },
+    {
+      "skill_id": "omniroute.gateway",
+      "name": "OmniRoute Gateway",
+      "kind": "infrastructure",
+      "runtime": "infrastructure",
+      "profiles": [],
+      "spdx_license": "MIT",
+      "licence_state": "approved",
+      "source_repo": "https://github.com/diegosouzapw/OmniRoute",
+      "source_commit": "5ffa68e835442a12ed1204a2eebf4076c298aecb",
+      "adapter": "kr_first_party_director_router_v1",
+      "tools": [],
+      "status": "unavailable_incompatible",
+      "verified_files": 0,
+      "missing_files": [],
+      "hash_mismatches": [],
+      "notes": "Inspected release/v3.8.55: monolithic Next.js/SQLite server unsuitable for Vercel 250 MB bounded serverless functions. First-party KathaRiftDirectorRouter adapter used instead with strict zero-spend & no-fallback policy."
+    },
+    {
+      "skill_id": "ponytail.dev",
+      "name": "Ponytail Coding Discipline Skill",
+      "kind": "development",
+      "runtime": "dev.agent",
+      "profiles": [
+        "dev"
+      ],
+      "spdx_license": "MIT",
+      "licence_state": "approved",
+      "source_repo": "https://github.com/DietrichGebert/ponytail",
+      "source_commit": "ebd8654c2c627f721eb8f9c0d1bd4090a29f9e10",
+      "adapter": null,
+      "tools": [],
+      "status": "dev_only_not_production",
+      "verified_files": 0,
+      "missing_files": [],
+      "hash_mismatches": [],
+      "notes": "Development-agent workflow discipline only. Explicitly isolated from production Story/Director AI (no repo mutation or shell tools in app)."
+    }
+  ]
+}

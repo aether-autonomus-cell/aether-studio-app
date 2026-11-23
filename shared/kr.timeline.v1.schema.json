@@ -1,0 +1,491 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "kr.timeline.v1"
+    },
+    "timeline_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "story_revision_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "settings_revision_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "fps": {
+      "type": "number",
+      "const": 24
+    },
+    "sample_rate": {
+      "type": "number",
+      "const": 48000
+    },
+    "active_audio_lang": {
+      "default": "hi",
+      "type": "string",
+      "enum": [
+        "hi",
+        "en"
+      ]
+    },
+    "active_caption_lang": {
+      "default": "both",
+      "type": "string",
+      "enum": [
+        "hi",
+        "en",
+        "both",
+        "off"
+      ]
+    },
+    "total_frames": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "clips": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "clip_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scene_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "in_frame": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "out_frame": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "source_in_frame": {
+            "default": 0,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "source_total_frames": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "image_url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "video_url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "drive_image_id": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "drive_mp4_id": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hi_audio_url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "en_audio_url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hi_audio_samples": {
+            "default": 0,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "en_audio_samples": {
+            "default": 0,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "waveform_hi": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "waveform_en": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "required": [
+          "clip_id",
+          "scene_id",
+          "label",
+          "in_frame",
+          "out_frame",
+          "source_in_frame",
+          "source_total_frames",
+          "image_url",
+          "video_url",
+          "drive_image_id",
+          "drive_mp4_id",
+          "hi_audio_url",
+          "en_audio_url",
+          "hi_audio_samples",
+          "en_audio_samples",
+          "waveform_hi",
+          "waveform_en"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "stems": {
+      "minItems": 5,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "stem_id": {
+            "type": "string",
+            "enum": [
+              "voice_hi",
+              "voice_en",
+              "music",
+              "sfx",
+              "ambience"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "gain_db": {
+            "default": 0,
+            "type": "number",
+            "minimum": -48,
+            "maximum": 12
+          },
+          "muted": {
+            "default": false,
+            "type": "boolean"
+          },
+          "solo": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "stem_id",
+          "label",
+          "gain_db",
+          "muted",
+          "solo"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "captions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "caption_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scene_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "in_frame": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "out_frame": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "hi_text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "en_text": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "caption_id",
+          "scene_id",
+          "in_frame",
+          "out_frame",
+          "hi_text",
+          "en_text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "effects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "effect_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scene_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "ken_burns_push",
+              "ken_burns_pull",
+              "pan_left",
+              "pan_right",
+              "fade_in",
+              "fade_out",
+              "restrained_v1"
+            ]
+          },
+          "in_frame": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "out_frame": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "intensity": {
+            "default": 0.35,
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "required": [
+          "effect_id",
+          "scene_id",
+          "type",
+          "in_frame",
+          "out_frame",
+          "intensity"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "keyframes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "keyframe_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scene_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "frame": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "property": {
+            "type": "string",
+            "enum": [
+              "zoom",
+              "pan_x",
+              "pan_y",
+              "opacity"
+            ]
+          },
+          "value": {
+            "type": "number"
+          },
+          "easing": {
+            "default": "ease_in_out",
+            "type": "string",
+            "enum": [
+              "linear",
+              "ease_in_out",
+              "ease_out"
+            ]
+          }
+        },
+        "required": [
+          "keyframe_id",
+          "scene_id",
+          "frame",
+          "property",
+          "value",
+          "easing"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "cuts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "cut_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "frame": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "scene_boundary",
+              "manual_split",
+              "ripple_trim"
+            ]
+          }
+        },
+        "required": [
+          "cut_id",
+          "frame",
+          "kind"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "silence_suggestions": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "suggestion_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "in_frame": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "out_frame": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "hi_peak_db": {
+            "type": "number"
+          },
+          "en_peak_db": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applied": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "suggestion_id",
+          "in_frame",
+          "out_frame",
+          "hi_peak_db",
+          "en_peak_db",
+          "reason",
+          "applied"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "updated_at": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "schema_version",
+    "timeline_id",
+    "project_id",
+    "story_revision_id",
+    "settings_revision_id",
+    "version",
+    "fps",
+    "sample_rate",
+    "active_audio_lang",
+    "active_caption_lang",
+    "total_frames",
+    "clips",
+    "stems",
+    "captions",
+    "effects",
+    "keyframes",
+    "cuts",
+    "silence_suggestions",
+    "updated_at"
+  ],
+  "additionalProperties": false
+}

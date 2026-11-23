@@ -1,0 +1,41 @@
+{
+  "schema_version": "kr.skill.manifest.v1",
+  "skill_id": "youtube.agent",
+  "name": "YouTube Agent Script/Edit/Package Skill",
+  "kind": "executable",
+  "source_repo": "https://github.com/Jakeschincariol/youtube-agent-skill",
+  "source_commit": "a2feb2104981a375ffd4f87ee04f4f5344ac43c6",
+  "spdx_license": "MIT",
+  "licence_state": "approved",
+  "runtime": "app.server",
+  "profiles": [
+    "app",
+    "worker"
+  ],
+  "adapter": "kr_youtube_skill_v1",
+  "tools": [
+    "youtube_score_hooks",
+    "youtube_detect_deadair",
+    "youtube_lint_title"
+  ],
+  "instruction_files": [
+    "skills/vendor/youtube-agent-skill/skills/yt-plan/SKILL.md",
+    "skills/vendor/youtube-agent-skill/skills/yt-script/SKILL.md",
+    "skills/vendor/youtube-agent-skill/skills/yt-edit/SKILL.md",
+    "skills/vendor/youtube-agent-skill/skills/yt-retention/SKILL.md",
+    "skills/vendor/youtube-agent-skill/skills/yt-package/SKILL.md",
+    "skills/vendor/youtube-agent-skill/skills/yt-chapters/SKILL.md",
+    "skills/vendor/youtube-agent-skill/skills/yt-shorts/SKILL.md"
+  ],
+  "entrypoint_files": [
+    "skills/vendor/youtube-agent-skill/LICENSE",
+    "skills/vendor/youtube-agent-skill/skills/yt-script/hooks.json",
+    "skills/vendor/youtube-agent-skill/skills/yt-script/hookscore.py",
+    "skills/vendor/youtube-agent-skill/skills/yt-edit/deadair.py",
+    "skills/vendor/youtube-agent-skill/skills/yt-package/title.py",
+    "skills/vendor/youtube-agent-skill/skills/yt-retention/retention.py",
+    "skills/vendor/youtube-agent-skill/skills/yt-chapters/chapters.py"
+  ],
+  "prerequisites": [],
+  "notes": "MIT packaging/hook/deadair analysis tools & instructions; no auto-publishing or analytics claim."
+}

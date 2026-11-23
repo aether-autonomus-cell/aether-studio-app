@@ -3,7 +3,7 @@ import { AuthProvider } from "@/lib/auth/provider";
 import { PreviewHostBridge } from "@/components/preview-host-bridge";
 import appCss from "../styles.css?url";
 
-const APP_NAME = "Aether Studio v2.0";
+const APP_NAME = "KathaRift Studio";
 
 export const Route = createRootRoute({
   head: () => ({
@@ -11,16 +11,14 @@ export const Route = createRootRoute({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" },
       { title: APP_NAME },
-      { name: "theme-color", content: "#070B16" },
+      { name: "theme-color", content: "#0B0E14" },
       {
         name: "description",
         content:
-          "Pure 2D Code-to-Video & Dual-Language Story Studio. Hindi + English narration, deterministic 2D preview, Colab MP4 render, and direct Drive/YouTube export.",
+          "KathaRift Studio — Bilingual Hindi + English illustrated anime story studio, non-destructive 24fps editor, and zero-spend Colab GPU production.",
       },
     ],
     links: [
-      { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
-      { rel: "manifest", href: "/manifest.webmanifest" },
       { rel: "stylesheet", href: appCss },
       { rel: "manifest", href: "/__grok/manifest.webmanifest" },
       { rel: "apple-touch-icon", href: "/__grok/icon-180.png" },

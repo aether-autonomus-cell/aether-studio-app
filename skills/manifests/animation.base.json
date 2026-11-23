@@ -1,0 +1,30 @@
+{
+  "schema_version": "kr.skill.manifest.v1",
+  "skill_id": "animation.base",
+  "name": "Claude Animation Base Timeline & Effects",
+  "kind": "renderer",
+  "source_repo": "https://github.com/JohnHeibel/ClaudeAnimationBase",
+  "source_commit": "0ac8bf2b31942376cb6b8c4074715595d512acd2",
+  "spdx_license": "MIT",
+  "licence_state": "approved",
+  "runtime": "worker.render",
+  "profiles": [
+    "worker"
+  ],
+  "adapter": "kr_anim_base_v1",
+  "tools": [
+    "compose_scene"
+  ],
+  "instruction_files": [
+    "skills/vendor/claude-animation-base/ANIMATION_GUIDE.md"
+  ],
+  "entrypoint_files": [
+    "skills/vendor/claude-animation-base/LICENSE",
+    "skills/vendor/claude-animation-base/src/config.js",
+    "skills/vendor/claude-animation-base/src/timeline.js"
+  ],
+  "prerequisites": [
+    "active_permitted_worker"
+  ],
+  "notes": "MIT deterministic easing/shot-wipe helpers for worker render profile; never replaces illustrated anime art with Clawd vectors."
+}

@@ -1,34 +1,80 @@
 #!/usr/bin/env node
 /**
- * Deploy-time database migrator (node-postgres, `pg`).
+ * Controlled PostgreSQL migrator (`node-postgres`, `pg`).
  *
- * Runs during `npm run build` — on every Vercel deploy — applying pending files
- * in ../migrations to DATABASE_URL. Each file is applied in one transaction and
- * recorded in a `_migrations` table, so it runs once and is safe to re-run.
- *
- * The read is non-recursive, so the opt-in auth schema under migrations/auth/
- * is not applied to an app that never asked for sign-in.
- *
- * No DATABASE_URL (local / preview builds) -> skip; the PGLite fallback applies
- * the same files at startup instead (see src/lib/db.ts).
+ * IMPORTANT: Never invoked from `npm run build` so PR Preview builds cannot
+ * mutate a shared or production database. Run explicitly as an operator step:
+ *   DATABASE_URL=... npm run db:migrate:status
+ *   DATABASE_URL=... npm run db:migrate
+ *   DATABASE_URL=... npm run db:rollback -- 0002_katharift.sql
  */
 import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import pg from "pg";
 import { pendingMigrations } from "./migration-plan.mjs";
+import { isMainModule } from "./with-app-env.mjs";
 
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) {
-  console.log(
-    "[migrate] DATABASE_URL not set — skipping (the PGLite fallback migrates itself).",
-  );
-  process.exit(0);
+export function parseMigrateArgs(argv) {
+  if (argv.includes("--status")) return { mode: "status", target: null };
+  const downIdx = argv.indexOf("--down");
+  if (downIdx !== -1) {
+    const target = argv[downIdx + 1]?.trim();
+    if (!target) {
+      return {
+        mode: "error",
+        error: "usage: node scripts/migrate.mjs --down <migration.sql>",
+      };
+    }
+    return { mode: "down", target };
+  }
+  return { mode: "apply", target: null };
+}
+
+export function checkMigrationPreconditions({ env = process.env, mode = "apply" } = {}) {
+  if (mode !== "status" && env.VERCEL_ENV?.trim() === "preview") {
+    return {
+      ok: false,
+      code: "PREVIEW_MIGRATION_BLOCKED",
+      error:
+        "[migrate] refused: VERCEL_ENV=preview must never mutate a shared or production database.",
+    };
+  }
+  const databaseUrl = env.DATABASE_URL?.trim();
+  if (!databaseUrl) {
+    return {
+      ok: false,
+      code: "DATABASE_URL_MISSING",
+      error:
+        "[migrate] DATABASE_URL is required for controlled migrations (no silent skip).",
+    };
+  }
+  return { ok: true, databaseUrl };
+}
+
+export function downMigrationFileName(upFileName) {
+  const base = upFileName.split("/").pop() ?? upFileName;
+  if (!base.endsWith(".sql")) {
+    throw new Error(`Expected .sql migration filename, got: ${upFileName}`);
+  }
+  return `${base.slice(0, -4)}.down.sql`;
 }
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
-async function main() {
+async function main(argv) {
+  const parsed = parseMigrateArgs(argv);
+  if (parsed.mode === "error") {
+    console.error(parsed.error);
+    process.exit(2);
+  }
+
+  const pre = checkMigrationPreconditions({ env: process.env, mode: parsed.mode });
+  if (!pre.ok) {
+    console.error(pre.error);
+    process.exit(1);
+  }
+
   let entries;
   try {
     entries = await readdir(migrationsDir);
@@ -36,28 +82,64 @@ async function main() {
     console.log("[migrate] no migrations/ directory — nothing to do.");
     return;
   }
-  // An app with no schema of its own must not pay for a database connection.
-  if (pendingMigrations(entries, []).length === 0) {
-    console.log("[migrate] no migrations — nothing to do.");
-    return;
-  }
 
-  const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
+  const pool = new pg.Pool({ connectionString: pre.databaseUrl, max: 1 });
   const client = await pool.connect();
   try {
     await client.query(
       "CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())",
     );
-    const applied = (await client.query("SELECT name FROM _migrations")).rows.map(
+    const applied = (await client.query("SELECT name FROM _migrations ORDER BY name ASC")).rows.map(
       (r) => r.name,
     );
+    const pending = pendingMigrations(entries, applied);
+
+    if (parsed.mode === "status") {
+      console.log(
+        JSON.stringify(
+          {
+            applied,
+            pending: pending.map((p) => p.name),
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
+
+    if (parsed.mode === "down") {
+      const target = parsed.target;
+      if (!applied.includes(target)) {
+        console.log(`[migrate] ${target} is not currently recorded in _migrations — nothing to roll back.`);
+        return;
+      }
+      const downName = downMigrationFileName(target);
+      const downPath = join(migrationsDir, "down", downName);
+      const downSql = await readFile(downPath, "utf8");
+      await client.query("BEGIN");
+      try {
+        await client.query(downSql);
+        await client.query("DELETE FROM _migrations WHERE name = $1", [target]);
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        throw err;
+      }
+      console.log(`[migrate] rolled back ${target} via migrations/down/${downName}`);
+      return;
+    }
+
+    if (pending.length === 0) {
+      console.log("[migrate] up to date.");
+      return;
+    }
 
     let count = 0;
-    for (const { name } of pendingMigrations(entries, applied)) {
+    for (const { name } of pending) {
       const text = await readFile(join(migrationsDir, name), "utf8");
       try {
         await client.query("BEGIN");
-        // pg's simple-query protocol runs a whole multi-statement file at once.
         await client.query(text);
         await client.query("INSERT INTO _migrations (name) VALUES ($1)", [name]);
         await client.query("COMMIT");
@@ -66,25 +148,26 @@ async function main() {
         try {
           await client.query("ROLLBACK");
         } catch {
-          // ROLLBACK fails when the connection died — keep the original error.
+          // keep original error
         }
         throw err;
       }
       console.log(`[migrate] applied ${name}`);
       count += 1;
     }
-    console.log(count ? `[migrate] done — ${count} migration(s) applied.` : "[migrate] up to date.");
+    console.log(`[migrate] done — ${count} migration(s) applied.`);
   } finally {
     client.release();
     await pool.end();
   }
 }
 
-main().catch((err) => {
-  console.error("[migrate] failed:", err?.message || err);
-  // pg errors carry the context needed to debug a bad SQL file.
-  for (const key of ["code", "detail", "hint", "position", "where"]) {
-    if (err?.[key] != null) console.error(`[migrate]   ${key}: ${err[key]}`);
-  }
-  process.exit(1);
-});
+if (isMainModule(import.meta.url)) {
+  main(process.argv.slice(2)).catch((err) => {
+    console.error("[migrate] failed:", err?.message || err);
+    for (const key of ["code", "detail", "hint", "position", "where"]) {
+      if (err?.[key] != null) console.error(`[migrate]   ${key}: ${err[key]}`);
+    }
+    process.exit(1);
+  });
+}

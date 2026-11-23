@@ -1,0 +1,503 @@
+{
+  "schema_version": "kr.skills.lock.v1",
+  "generated_at": "2026-11-22T16:15:00Z",
+  "skills": [
+    {
+      "skill_id": "hyperframes.compose",
+      "name": "HyperFrames Compositor & Motion Doctrine",
+      "kind": "renderer",
+      "source_repo": "https://github.com/heygen-com/hyperframes",
+      "source_commit": "086948766477b8ae4c4fa1be0b4215a627e1062b",
+      "tarball_sha256": "2afe110cf029933e3620c18f4911902e0b6765be3c4af559cb9acb736940e9f0",
+      "spdx_license": "Apache-2.0",
+      "licence_state": "approved",
+      "runtime": "worker.render",
+      "profiles": [
+        "app",
+        "worker"
+      ],
+      "adapter": "kr_hyperframes_v1",
+      "tools": [
+        "compose_scene",
+        "hyperframes_align_captions"
+      ],
+      "instruction_files": [
+        {
+          "path": "skills/vendor/hyperframes/.agents/skills/motion-doctrine/SKILL.md",
+          "upstream_path": ".agents/skills/motion-doctrine/SKILL.md",
+          "sha256": "d4d20aa33a57784154ffe55b83424037842269e59cc1e821c1b18bd541877142",
+          "bytes": 11936
+        },
+        {
+          "path": "skills/vendor/hyperframes/.agents/skills/motion-doctrine/references/seam-gate.md",
+          "upstream_path": ".agents/skills/motion-doctrine/references/seam-gate.md",
+          "sha256": "f69614fddd916e07150c0862e3c49937e076259790586b80bd3dcf240ea46782",
+          "bytes": 4778
+        },
+        {
+          "path": "skills/vendor/hyperframes/.agents/skills/captions-overlay/SKILL.md",
+          "upstream_path": ".agents/skills/captions-overlay/SKILL.md",
+          "sha256": "95edff863c75088bb9f603790fb9991e5ef1a2b1887ecff04e499031c7e46655",
+          "bytes": 5801
+        }
+      ],
+      "entrypoint_files": [
+        {
+          "path": "skills/vendor/hyperframes/LICENSE",
+          "upstream_path": "LICENSE",
+          "sha256": "4259155fb06f127687ee7b0a8a3682d45132db0f2da26cbc0b7a2d1e796436b8",
+          "bytes": 10763
+        },
+        {
+          "path": "skills/vendor/hyperframes/.agents/skills/motion-doctrine/scripts/seam-gate.mjs",
+          "upstream_path": ".agents/skills/motion-doctrine/scripts/seam-gate.mjs",
+          "sha256": "580e29c1eff176d52fc62b1a4d92443242712e974c9cc0b4e0bbf57907919605",
+          "bytes": 22737
+        },
+        {
+          "path": "skills/vendor/hyperframes/.agents/skills/changelog-video/scripts/align-captions.mjs",
+          "upstream_path": ".agents/skills/changelog-video/scripts/align-captions.mjs",
+          "sha256": "871e58b43daf9e8e52d6838df70a4b5d49982a1c3fdacc973a42362fcd82a7ab",
+          "bytes": 4581
+        }
+      ],
+      "npm_dependencies": {
+        "hyperframes": "0.9.81"
+      },
+      "prerequisites": [
+        "node>=22",
+        "active_permitted_worker"
+      ],
+      "initial_status": "waiting_worker",
+      "notes": "Apache-2.0 instructions + Node 22 scripts provisioned in app/worker; full MP4 compose execution requires Colab/worker Node22 + FFmpeg runtime."
+    },
+    {
+      "skill_id": "cinematic.director",
+      "name": "Cinematic Skill Director & Beat/Mix Pack",
+      "kind": "hybrid",
+      "source_repo": "https://github.com/Moh4696/cinematic-skill",
+      "source_commit": "bf435561c6203f90f971300efe952b68b5ec3417",
+      "tarball_sha256": "09d6c115b93ba3332eed77259477e416cd1406a3282041da3a1606507c6b09b5",
+      "spdx_license": "MIT",
+      "licence_state": "approved",
+      "runtime": "app.server",
+      "profiles": [
+        "app",
+        "worker"
+      ],
+      "adapter": "kr_cinematic_v1",
+      "tools": [
+        "cinematic_lint_beats",
+        "plan_chapter"
+      ],
+      "instruction_files": [
+        {
+          "path": "skills/vendor/cinematic-skill/skills/cinematic-film/SKILL.md",
+          "upstream_path": "skills/cinematic-film/SKILL.md",
+          "sha256": "507be652654aa4e1ccb4aa508fab73ca9f2a718a9779b940a5081b62aeb5ad12",
+          "bytes": 9607
+        },
+        {
+          "path": "skills/vendor/cinematic-skill/skills/cinematic-film/references/story.md",
+          "upstream_path": "skills/cinematic-film/references/story.md",
+          "sha256": "47f4da91e91ef094bee81dd6dd622936cf5144be2535db68d7bd5fce83c2b74e",
+          "bytes": 4997
+        },
+        {
+          "path": "skills/vendor/cinematic-skill/skills/cinematic-film/references/film.md",
+          "upstream_path": "skills/cinematic-film/references/film.md",
+          "sha256": "695bd4f06a5049721c47d94582793cf39eb60d1d31c51fb238bea05d8c24f930",
+          "bytes": 8043
+        },
+        {
+          "path": "skills/vendor/cinematic-skill/skills/cinematic-film/references/sound.md",
+          "upstream_path": "skills/cinematic-film/references/sound.md",
+          "sha256": "781a2ac4b16324cd83213685611dd35786c95c1d7fb60accba4e63ac3ccaaa1c",
+          "bytes": 2659
+        },
+        {
+          "path": "skills/vendor/cinematic-skill/skills/cinematic-film/references/voice.md",
+          "upstream_path": "skills/cinematic-film/references/voice.md",
+          "sha256": "558b319acb4d49cba0baf1b62dc8bbda1c509402efc5d8142cfea87625bb17f3",
+          "bytes": 2993
+        },
+        {
+          "path": "skills/vendor/cinematic-skill/skills/cinematic-film/references/performance.md",
+          "upstream_path": "skills/cinematic-film/references/performance.md",
+          "sha256": "62d3d915dfcbb0f94e852e5a82faa985463d12b7cf3cda91cbb4432b9e972b61",
+          "bytes": 2884
+        }
+      ],
+      "entrypoint_files": [
+        {
+          "path": "skills/vendor/cinematic-skill/LICENSE",
+          "upstream_path": "LICENSE",
+          "sha256": "9e22b0b3fd03d4b2c0e696c055c1d920af9a40e33eed82878844f018610e7102",
+          "bytes": 1065
+        },
+        {
+          "path": "skills/vendor/cinematic-skill/skills/cinematic-film/scripts/make_beats.py",
+          "upstream_path": "skills/cinematic-film/scripts/make_beats.py",
+          "sha256": "ecd4cb4662fbdf595799251e0417f9fa0c448cac629b62ff30591c3b73d42a60",
+          "bytes": 4144
+        },
+        {
+          "path": "skills/vendor/cinematic-skill/skills/cinematic-film/scripts/captions.py",
+          "upstream_path": "skills/cinematic-film/scripts/captions.py",
+          "sha256": "e58bbaabfb4f3f2553a5ffce217a311724f435325e9aed566978758dd4d4c9d0",
+          "bytes": 7843
+        },
+        {
+          "path": "skills/vendor/cinematic-skill/skills/cinematic-film/scripts/mix_soundtrack.py",
+          "upstream_path": "skills/cinematic-film/scripts/mix_soundtrack.py",
+          "sha256": "f5629027f3cf69d842484eee0f4c7eb05a4e5c49fe9ffae2143e541f0ff010bb",
+          "bytes": 5167
+        },
+        {
+          "path": "skills/vendor/cinematic-skill/skills/cinematic-film/scripts/build_sfx.py",
+          "upstream_path": "skills/cinematic-film/scripts/build_sfx.py",
+          "sha256": "a5ad451c5c1ca53140dd19f9e4b33b31a509bd49a797078e5c3075fb2adbd539",
+          "bytes": 12218
+        }
+      ],
+      "npm_dependencies": {},
+      "prerequisites": [],
+      "initial_status": "ready",
+      "notes": "MIT instructions loaded by Story/Director orchestrator; make_beats/captions/mix scripts provisioned for worker & local smoke validation."
+    },
+    {
+      "skill_id": "youtube.agent",
+      "name": "YouTube Agent Script/Edit/Package Skill",
+      "kind": "executable",
+      "source_repo": "https://github.com/Jakeschincariol/youtube-agent-skill",
+      "source_commit": "a2feb2104981a375ffd4f87ee04f4f5344ac43c6",
+      "tarball_sha256": "ec6905672d3883fc78bf1a39ddf367d56dc85cc74cf18f904b869f6bd40afbbf",
+      "spdx_license": "MIT",
+      "licence_state": "approved",
+      "runtime": "app.server",
+      "profiles": [
+        "app",
+        "worker"
+      ],
+      "adapter": "kr_youtube_skill_v1",
+      "tools": [
+        "youtube_score_hooks",
+        "youtube_detect_deadair",
+        "youtube_lint_title"
+      ],
+      "instruction_files": [
+        {
+          "path": "skills/vendor/youtube-agent-skill/skills/yt-plan/SKILL.md",
+          "upstream_path": "skills/yt-plan/SKILL.md",
+          "sha256": "c82983c91e69b1d816a978157dd1b3c37241611ad2a22463ad2c9291ca1b94cd",
+          "bytes": 2097
+        },
+        {
+          "path": "skills/vendor/youtube-agent-skill/skills/yt-script/SKILL.md",
+          "upstream_path": "skills/yt-script/SKILL.md",
+          "sha256": "23fe2c4c52b4dbdae03295d71a8bdede254a94b3d6b0da83b025e8b622020366",
+          "bytes": 2685
+        },
+        {
+          "path": "skills/vendor/youtube-agent-skill/skills/yt-edit/SKILL.md",
+          "upstream_path": "skills/yt-edit/SKILL.md",
+          "sha256": "b9f83e8b972e91a4abb5e0f4f9fc4b5cde9e8727609ce1213b0e583718cd8aeb",
+          "bytes": 1639
+        },
+        {
+          "path": "skills/vendor/youtube-agent-skill/skills/yt-retention/SKILL.md",
+          "upstream_path": "skills/yt-retention/SKILL.md",
+          "sha256": "2777dd1f8f9ea04174bf13c9dc0132be907fb3852380376db359bcf786ba4f8e",
+          "bytes": 1696
+        },
+        {
+          "path": "skills/vendor/youtube-agent-skill/skills/yt-package/SKILL.md",
+          "upstream_path": "skills/yt-package/SKILL.md",
+          "sha256": "0347a791664ff5d05eda87b2535e34ef8177c9e9b5e5c077c2f8113942108506",
+          "bytes": 2303
+        },
+        {
+          "path": "skills/vendor/youtube-agent-skill/skills/yt-chapters/SKILL.md",
+          "upstream_path": "skills/yt-chapters/SKILL.md",
+          "sha256": "06d2fc094d59ec6da73d812bd7b21590f8099352922ea2e3151b45922bf315b3",
+          "bytes": 1380
+        },
+        {
+          "path": "skills/vendor/youtube-agent-skill/skills/yt-shorts/SKILL.md",
+          "upstream_path": "skills/yt-shorts/SKILL.md",
+          "sha256": "cbaaaf907bb14491baba0ea23e3415f268f7fff21897c6eb487e7cb1113b32c8",
+          "bytes": 1516
+        }
+      ],
+      "entrypoint_files": [
+        {
+          "path": "skills/vendor/youtube-agent-skill/LICENSE",
+          "upstream_path": "LICENSE",
+          "sha256": "857c8d5276809c8196b3cd7cb3300324768bfc562b2b6281b06d6865058e186c",
+          "bytes": 1073
+        },
+        {
+          "path": "skills/vendor/youtube-agent-skill/skills/yt-script/hooks.json",
+          "upstream_path": "skills/yt-script/hooks.json",
+          "sha256": "76c47b4ad410a8856c9d27aa489d7c447b3ebe30a9024f03e2d59fefe267f5cb",
+          "bytes": 9894
+        },
+        {
+          "path": "skills/vendor/youtube-agent-skill/skills/yt-script/hookscore.py",
+          "upstream_path": "skills/yt-script/hookscore.py",
+          "sha256": "8205dca03de1d5d8e25614e7c0d8d40fd756a99b838320462195b342d5eb0545",
+          "bytes": 5703
+        },
+        {
+          "path": "skills/vendor/youtube-agent-skill/skills/yt-edit/deadair.py",
+          "upstream_path": "skills/yt-edit/deadair.py",
+          "sha256": "61d13cd77e7c31e5e12b6e9e016c7d1ffb92d4a5ec5597dd69b98545c81eb9c3",
+          "bytes": 4244
+        },
+        {
+          "path": "skills/vendor/youtube-agent-skill/skills/yt-package/title.py",
+          "upstream_path": "skills/yt-package/title.py",
+          "sha256": "e5f2ba4e205cc5d4bca9c8c0dd92890ea964158ee8266759e2c75c3958cef723",
+          "bytes": 4080
+        },
+        {
+          "path": "skills/vendor/youtube-agent-skill/skills/yt-retention/retention.py",
+          "upstream_path": "skills/yt-retention/retention.py",
+          "sha256": "2ed29f0bc24e7b65e9661a879692fe954b4f29e486ebf19f3c2c672e21b0a906",
+          "bytes": 4666
+        },
+        {
+          "path": "skills/vendor/youtube-agent-skill/skills/yt-chapters/chapters.py",
+          "upstream_path": "skills/yt-chapters/chapters.py",
+          "sha256": "f21f17a74f0b2b6719bbf45b16bf404acb4fa639fc765df46b2aec442ab2dcbe",
+          "bytes": 3744
+        }
+      ],
+      "npm_dependencies": {},
+      "prerequisites": [],
+      "initial_status": "ready",
+      "notes": "MIT packaging/hook/deadair analysis tools & instructions; no auto-publishing or analytics claim."
+    },
+    {
+      "skill_id": "moneyprinter.assembly",
+      "name": "MoneyPrinterTurbo Media Assembly Helpers",
+      "kind": "executable",
+      "source_repo": "https://github.com/harry0703/MoneyPrinterTurbo",
+      "source_commit": "86e45a2233a72c41d83389ac5cb49bbf5f6a847d",
+      "tarball_sha256": "3f22baa1a531d8f15fee9f88cbd808bd445d5f67a81a0c5b2e62a145f81217b6",
+      "spdx_license": "MIT",
+      "licence_state": "approved",
+      "runtime": "worker.media",
+      "profiles": [
+        "worker"
+      ],
+      "adapter": "kr_mpt_assembly_v1",
+      "tools": [
+        "verify_media",
+        "prepare_export"
+      ],
+      "instruction_files": [],
+      "entrypoint_files": [
+        {
+          "path": "skills/vendor/money-printer-turbo/LICENSE",
+          "upstream_path": "LICENSE",
+          "sha256": "87dd19b6a0779e14a91c1b06423ef251df37e89666160c031130a26bae68c229",
+          "bytes": 1061
+        },
+        {
+          "path": "skills/vendor/money-printer-turbo/app/services/subtitle.py",
+          "upstream_path": "app/services/subtitle.py",
+          "sha256": "30ca8591fdc21c741295d4377c92f121f8d4f23695c767c675e5e7d04ffd466d",
+          "bytes": 24586
+        },
+        {
+          "path": "skills/vendor/money-printer-turbo/app/services/utils/video_effects.py",
+          "upstream_path": "app/services/utils/video_effects.py",
+          "sha256": "4b4493893e5b416b1b0e446479fb6566e9e5e4d67988ba05127187c70a5f1b0c",
+          "bytes": 8787
+        }
+      ],
+      "npm_dependencies": {},
+      "prerequisites": [
+        "python>=3.10",
+        "ffmpeg",
+        "active_permitted_worker"
+      ],
+      "initial_status": "waiting_worker",
+      "notes": "MIT subtitle/video effect helpers normalized behind KathaRift worker adapter; no stock-footage replacement or standalone UI."
+    },
+    {
+      "skill_id": "animation.base",
+      "name": "Claude Animation Base Timeline & Effects",
+      "kind": "renderer",
+      "source_repo": "https://github.com/JohnHeibel/ClaudeAnimationBase",
+      "source_commit": "0ac8bf2b31942376cb6b8c4074715595d512acd2",
+      "tarball_sha256": "42b4f954f17ad60fa13cd71ad4539bf7d24a09e5213db1418bc510061ca50c32",
+      "spdx_license": "MIT",
+      "licence_state": "approved",
+      "runtime": "worker.render",
+      "profiles": [
+        "worker"
+      ],
+      "adapter": "kr_anim_base_v1",
+      "tools": [
+        "compose_scene"
+      ],
+      "instruction_files": [
+        {
+          "path": "skills/vendor/claude-animation-base/ANIMATION_GUIDE.md",
+          "upstream_path": "ANIMATION_GUIDE.md",
+          "sha256": "f638e1fb3876f587e39ec11a20e2df3aac91421c926d82c2743768642caab990",
+          "bytes": 36029
+        }
+      ],
+      "entrypoint_files": [
+        {
+          "path": "skills/vendor/claude-animation-base/LICENSE",
+          "upstream_path": "LICENSE",
+          "sha256": "7d25ae95b305b884c08ce898e53b58d2e180ff0119e5d203d8b4ae30420f3b33",
+          "bytes": 1068
+        },
+        {
+          "path": "skills/vendor/claude-animation-base/src/config.js",
+          "upstream_path": "src/config.js",
+          "sha256": "6d9374c59bd90bede9d4761eea6136b772a5883c414a67b8a5673510b8c1d435",
+          "bytes": 363
+        },
+        {
+          "path": "skills/vendor/claude-animation-base/src/timeline.js",
+          "upstream_path": "src/timeline.js",
+          "sha256": "93d455142bf642355cb77cce64ad1a8397996be4f23e121bd18d6fce52bc1503",
+          "bytes": 2994
+        }
+      ],
+      "npm_dependencies": {},
+      "prerequisites": [
+        "active_permitted_worker"
+      ],
+      "initial_status": "waiting_worker",
+      "notes": "MIT deterministic easing/shot-wipe helpers for worker render profile; never replaces illustrated anime art with Clawd vectors."
+    },
+    {
+      "skill_id": "lemo.audio_sfx",
+      "name": "Lemo-Opuscar Procedural SFX (MIT Code Only)",
+      "kind": "executable",
+      "source_repo": "https://github.com/lemomo-ai/lemo-opuscar",
+      "source_commit": "f9e204293930952b61ba921cd8944d05f121beee",
+      "tarball_sha256": "772bc329cc32754574fba25f98c652ed0ccc0ec5807ab9db80e582458535d7b2",
+      "spdx_license": "MIT",
+      "licence_state": "approved",
+      "runtime": "worker.media",
+      "profiles": [
+        "worker"
+      ],
+      "adapter": "kr_lemo_sfx_v1",
+      "tools": [
+        "synthesize_sfx"
+      ],
+      "instruction_files": [],
+      "entrypoint_files": [
+        {
+          "path": "skills/vendor/lemo-opuscar/LICENSE",
+          "upstream_path": "LICENSE",
+          "sha256": "7d52e502a88d59f6ade9436ecf7187e654e0d36176be0bcf30b064a5db13b12a",
+          "bytes": 7913
+        },
+        {
+          "path": "skills/vendor/lemo-opuscar/LICENSES/MIT.txt",
+          "upstream_path": "LICENSES/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "bytes": 1078
+        },
+        {
+          "path": "skills/vendor/lemo-opuscar/REUSE.toml",
+          "upstream_path": "REUSE.toml",
+          "sha256": "2d31200b27558c5b3be4dda62dea25175e71444470d7d4cf1bf553217caa2cfd",
+          "bytes": 23080
+        },
+        {
+          "path": "skills/vendor/lemo-opuscar/core/audio/sfx.py",
+          "upstream_path": "core/audio/sfx.py",
+          "sha256": "d43584b58527a40bd720889bb2fb5c9d62b9868a43fbb73c68e06b1161a75689",
+          "bytes": 5759
+        }
+      ],
+      "npm_dependencies": {},
+      "prerequisites": [
+        "numpy",
+        "scipy",
+        "active_permitted_worker"
+      ],
+      "initial_status": "waiting_worker",
+      "notes": "MIT procedural 48 kHz SFX synthesizer (whoosh, thump, rumble, crash) verified from REUSE.toml."
+    },
+    {
+      "skill_id": "lemo.style_docs",
+      "name": "Lemo-Opuscar Style Guides & Prompts",
+      "kind": "instruction",
+      "source_repo": "https://github.com/lemomo-ai/lemo-opuscar",
+      "source_commit": "f9e204293930952b61ba921cd8944d05f121beee",
+      "tarball_sha256": "772bc329cc32754574fba25f98c652ed0ccc0ec5807ab9db80e582458535d7b2",
+      "spdx_license": "CC-BY-NC-4.0",
+      "licence_state": "blocked_non_commercial",
+      "runtime": "app.server",
+      "profiles": [],
+      "adapter": null,
+      "tools": [],
+      "instruction_files": [],
+      "entrypoint_files": [],
+      "npm_dependencies": {},
+      "prerequisites": [
+        "commercial_license_clearance"
+      ],
+      "initial_status": "blocked_licence",
+      "notes": "EXCLUDED BY LICENSE GATE: Lemo-Opuscar *.md and style prompts are CC-BY-NC-4.0 (Non-Commercial). Never vendored or loaded into commercial/YouTube workflows."
+    },
+    {
+      "skill_id": "omniroute.gateway",
+      "name": "OmniRoute Gateway",
+      "kind": "infrastructure",
+      "source_repo": "https://github.com/diegosouzapw/OmniRoute",
+      "source_commit": "5ffa68e835442a12ed1204a2eebf4076c298aecb",
+      "tarball_sha256": null,
+      "spdx_license": "MIT",
+      "licence_state": "approved",
+      "runtime": "infrastructure",
+      "profiles": [],
+      "adapter": "kr_first_party_director_router_v1",
+      "tools": [],
+      "instruction_files": [],
+      "entrypoint_files": [],
+      "npm_dependencies": {},
+      "prerequisites": [
+        "long_lived_node_gateway_not_vercel_serverless"
+      ],
+      "initial_status": "unavailable_incompatible",
+      "notes": "Inspected release/v3.8.55: monolithic Next.js/SQLite server unsuitable for Vercel 250 MB bounded serverless functions. First-party KathaRiftDirectorRouter adapter used instead with strict zero-spend & no-fallback policy."
+    },
+    {
+      "skill_id": "ponytail.dev",
+      "name": "Ponytail Coding Discipline Skill",
+      "kind": "development",
+      "source_repo": "https://github.com/DietrichGebert/ponytail",
+      "source_commit": "ebd8654c2c627f721eb8f9c0d1bd4090a29f9e10",
+      "tarball_sha256": null,
+      "spdx_license": "MIT",
+      "licence_state": "approved",
+      "runtime": "dev.agent",
+      "profiles": [
+        "dev"
+      ],
+      "adapter": null,
+      "tools": [],
+      "instruction_files": [],
+      "entrypoint_files": [],
+      "npm_dependencies": {},
+      "prerequisites": [
+        "dev_coding_environment_only"
+      ],
+      "initial_status": "dev_only_not_production",
+      "notes": "Development-agent workflow discipline only. Explicitly isolated from production Story/Director AI (no repo mutation or shell tools in app)."
+    }
+  ]
+}

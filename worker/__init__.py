@@ -1,1 +1,1 @@
-"""Aether Studio v2.0 Colab Worker Package."""
+"""KathaRift Studio Python Worker package."""

@@ -1,0 +1,20 @@
+{
+  "schema_version": "kr.skill.manifest.v1",
+  "skill_id": "lemo.style_docs",
+  "name": "Lemo-Opuscar Style Guides & Prompts",
+  "kind": "instruction",
+  "source_repo": "https://github.com/lemomo-ai/lemo-opuscar",
+  "source_commit": "f9e204293930952b61ba921cd8944d05f121beee",
+  "spdx_license": "CC-BY-NC-4.0",
+  "licence_state": "blocked_non_commercial",
+  "runtime": "app.server",
+  "profiles": [],
+  "adapter": null,
+  "tools": [],
+  "instruction_files": [],
+  "entrypoint_files": [],
+  "prerequisites": [
+    "commercial_license_clearance"
+  ],
+  "notes": "EXCLUDED BY LICENSE GATE: Lemo-Opuscar *.md and style prompts are CC-BY-NC-4.0 (Non-Commercial). Never vendored or loaded into commercial/YouTube workflows."
+}
