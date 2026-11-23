@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ShieldAlert, ShieldCheck, Wrench, X } from "lucide-react";
 import { FREE_ROUTE_ALLOWLIST, type FreeRouteId } from "@/packages/contracts/schemas";
+import { classifyClipMediaStatus } from "@/packages/editor/media-status";
 import { krApiFetch, type StudioDrawer, type WorkspaceSnapshot } from "./types";
 
 interface DrawersProps {
@@ -279,18 +280,39 @@ export function StudioDrawers({ drawer, workspace, onClose, onRefresh }: Drawers
 
           {drawer === "assets" && (
             <div className="space-y-2.5">
-              {workspace.timeline.clips.map((clip) => (
-                <div key={clip.clip_id} className="kr-card rounded-2xl p-4 text-xs">
-                  <div className="font-semibold text-white">{clip.label}</div>
-                  <div className="mt-1 text-[var(--kr-muted)]">
-                    Frames [{clip.in_frame}, {clip.out_frame}) · HI {clip.hi_audio_samples} samples · EN{" "}
-                    {clip.en_audio_samples} samples
+              <div className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-[11px] text-[var(--kr-muted)]">
+                Sample counts without rendered audio are duration estimates (48 kHz target), not
+                measured WAV samples.
+              </div>
+              {workspace.timeline.clips.map((clip) => {
+                const cp =
+                  workspace.jobs[0]?.checkpoints.find((c) => c.scene_id === clip.scene_id) ?? null;
+                const mediaStatus = classifyClipMediaStatus(clip, cp);
+                const hasRealHiAudio = Boolean(clip.hi_audio_url || cp?.hi_audio_drive_id);
+                const hasRealEnAudio = Boolean(clip.en_audio_url || cp?.en_audio_drive_id);
+                return (
+                  <div key={clip.clip_id} className="kr-card rounded-2xl p-4 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-white">{clip.label}</span>
+                      <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-200">
+                        {mediaStatus.picture.state}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[var(--kr-muted)]">
+                      Frames [{clip.in_frame}, {clip.out_frame}) ·{" "}
+                      {hasRealHiAudio ? "HI audio" : "HI target est."} {clip.hi_audio_samples}{" "}
+                      samples · {hasRealEnAudio ? "EN audio" : "EN target est."}{" "}
+                      {clip.en_audio_samples} samples
+                    </div>
+                    <div className="mt-1 font-mono text-[11px] text-violet-300">
+                      Picture: {mediaStatus.picture.reason}
+                    </div>
+                    <div className="mt-0.5 font-mono text-[11px] text-slate-400">
+                      Audio HI: {mediaStatus.hiAudio.state} · EN: {mediaStatus.enAudio.state}
+                    </div>
                   </div>
-                  <div className="mt-1 font-mono text-[11px] text-violet-300">
-                    Drive Plate: {clip.drive_image_id ?? "Pending Colab worker render"}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 

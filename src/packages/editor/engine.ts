@@ -9,11 +9,13 @@ import type {
   KrCutMarker,
   KrEffectSpan,
   KrKeyframe,
+  KrSceneCheckpoint,
   KrSilenceSuggestion,
   KrStoryBible,
   KrTimelineClip,
   KrTimelineV1,
 } from "../contracts/schemas.ts";
+import { classifyClipMediaStatus, type MediaProbeMap } from "./media-status.ts";
 
 export function deterministicWaveform(seedText: string, bins = 48): number[] {
   let h = 2166136261;
@@ -484,6 +486,19 @@ export function trimClipOutEdge(
     frame: cut.frame >= oldOut ? cut.frame + actualDelta : cut.frame,
   }));
 
+  const nextSuggestions: KrSilenceSuggestion[] = timeline.silence_suggestions
+    .map((s) => {
+      if (s.in_frame >= oldOut) {
+        return { ...s, in_frame: s.in_frame + actualDelta, out_frame: s.out_frame + actualDelta };
+      }
+      if (s.out_frame > proposedOut) {
+        if (s.in_frame >= proposedOut) return null;
+        return { ...s, out_frame: proposedOut };
+      }
+      return s;
+    })
+    .filter((s): s is KrSilenceSuggestion => s !== null && s.out_frame > s.in_frame);
+
   return {
     ...timeline,
     version: timeline.version + 1,
@@ -493,8 +508,149 @@ export function trimClipOutEdge(
     effects: nextEffects,
     keyframes: nextKeyframes,
     cuts: nextCuts,
+    silence_suggestions: nextSuggestions,
     updated_at: new Date().toISOString(),
   };
+}
+
+/**
+ * Ripple-trim a clip's in edge (source_in_frame) by deltaFrames:
+ * positive delta trims start inward (shortens clip); negative delta restores earlier source frames down to 0.
+ */
+export function trimClipInEdge(
+  timeline: KrTimelineV1,
+  clipId: string,
+  deltaFrames: number,
+): KrTimelineV1 {
+  const idx = timeline.clips.findIndex((c) => c.clip_id === clipId);
+  if (idx < 0) throw new Error(`Clip ${clipId} not found`);
+  const clip = timeline.clips[idx];
+  const minDur = 12;
+  const currentDur = clip.out_frame - clip.in_frame;
+  const maxSourceIn = clip.source_in_frame + Math.max(0, currentDur - minDur);
+  const proposedSourceIn = Math.max(
+    0,
+    Math.min(maxSourceIn, clip.source_in_frame + deltaFrames),
+  );
+  const actualSourceDelta = proposedSourceIn - clip.source_in_frame;
+  if (actualSourceDelta === 0) return timeline;
+
+  const outShift = -actualSourceDelta;
+  const oldOut = clip.out_frame;
+  const newOut = oldOut + outShift;
+
+  const nextClips = timeline.clips.map((c, i) => {
+    if (i === idx) {
+      return {
+        ...c,
+        source_in_frame: proposedSourceIn,
+        out_frame: newOut,
+      };
+    }
+    if (i > idx) {
+      return {
+        ...c,
+        in_frame: c.in_frame + outShift,
+        out_frame: c.out_frame + outShift,
+      };
+    }
+    return c;
+  });
+
+  const shiftAfterOldOut = (f: number) => (f >= oldOut ? f + outShift : f);
+
+  const nextCaptions = timeline.captions.map((cap) => {
+    if (cap.out_frame === oldOut && cap.scene_id === clip.scene_id) {
+      return { ...cap, out_frame: newOut };
+    }
+    return {
+      ...cap,
+      in_frame: shiftAfterOldOut(cap.in_frame),
+      out_frame: shiftAfterOldOut(cap.out_frame),
+    };
+  });
+
+  const nextEffects = timeline.effects.map((fx) => {
+    if (fx.out_frame === oldOut && fx.scene_id === clip.scene_id) {
+      return { ...fx, out_frame: newOut };
+    }
+    return {
+      ...fx,
+      in_frame: shiftAfterOldOut(fx.in_frame),
+      out_frame: shiftAfterOldOut(fx.out_frame),
+    };
+  });
+
+  const nextKeyframes = timeline.keyframes.map((kf) => ({
+    ...kf,
+    frame: kf.frame >= oldOut ? kf.frame + outShift : kf.frame,
+  }));
+
+  const nextCuts: KrCutMarker[] = timeline.cuts.map((cut) => ({
+    ...cut,
+    frame: cut.frame >= oldOut ? cut.frame + outShift : cut.frame,
+  }));
+
+  const nextSuggestions: KrSilenceSuggestion[] = timeline.silence_suggestions
+    .map((s) => {
+      if (s.in_frame >= oldOut) {
+        return { ...s, in_frame: s.in_frame + outShift, out_frame: s.out_frame + outShift };
+      }
+      if (s.out_frame > newOut) {
+        if (s.in_frame >= newOut) return null;
+        return { ...s, out_frame: newOut };
+      }
+      return s;
+    })
+    .filter((s): s is KrSilenceSuggestion => s !== null && s.out_frame > s.in_frame);
+
+  return {
+    ...timeline,
+    version: timeline.version + 1,
+    total_frames: recomputeTotalFrames(nextClips),
+    clips: nextClips,
+    captions: nextCaptions,
+    effects: nextEffects,
+    keyframes: nextKeyframes,
+    cuts: nextCuts,
+    silence_suggestions: nextSuggestions,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+/**
+ * Auto-trimming silence on the real timeline is strictly forbidden unless BOTH
+ * HI and EN audio assets overlapping the span are validated real audio (never demo/seeded).
+ */
+export function canAutoTrimSilenceSuggestion(
+  timeline: KrTimelineV1,
+  suggestion: Pick<KrSilenceSuggestion, "in_frame" | "out_frame">,
+  probeMap: MediaProbeMap,
+  checkpoints: readonly KrSceneCheckpoint[] = [],
+): boolean {
+  const overlapping = timeline.clips.filter(
+    (c) => c.out_frame > suggestion.in_frame && c.in_frame < suggestion.out_frame,
+  );
+  if (overlapping.length === 0) return false;
+  return overlapping.every((clip) => {
+    const cp = checkpoints.find((item) => item.scene_id === clip.scene_id) ?? null;
+    const status = classifyClipMediaStatus(clip, cp, probeMap);
+    return status.hiAudio.state === "validated" && status.enAudio.state === "validated";
+  });
+}
+
+export function applyMeasuredSilenceTrim(
+  timeline: KrTimelineV1,
+  suggestion: Pick<KrSilenceSuggestion, "in_frame" | "out_frame">,
+  probeMap: MediaProbeMap,
+  checkpoints: readonly KrSceneCheckpoint[] = [],
+): KrTimelineV1 {
+  if (!canAutoTrimSilenceSuggestion(timeline, suggestion, probeMap, checkpoints)) {
+    throw new Error(
+      "Cannot auto-trim timeline from demo or unvalidated silence suggestions.",
+    );
+  }
+  return rippleDeleteRange(timeline, suggestion.in_frame, suggestion.out_frame);
 }
 
 export function updateAudioStem(
