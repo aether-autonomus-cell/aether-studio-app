@@ -1,4 +1,5 @@
 import { DatabaseConfigurationError } from "../../lib/db-policy.ts";
+import { StoryPatchRequestError } from "../../packages/director/story-patch.ts";
 import { SkillRegistryUnavailableError } from "../../packages/skill-runtime/registry.ts";
 import { AuthConfigurationError, OwnerForbiddenError } from "./auth-policy.ts";
 
@@ -9,6 +10,16 @@ export class ProjectNotFoundError extends Error {
   constructor(message = "Project not found") {
     super(message);
     this.name = "ProjectNotFoundError";
+  }
+}
+
+export class StoryRevisionConflictError extends Error {
+  readonly status = 409;
+  readonly code = "STORY_REVISION_CONFLICT";
+
+  constructor(message = "Story revision changed; refresh before proposing a patch.") {
+    super(message);
+    this.name = "StoryRevisionConflictError";
   }
 }
 
@@ -56,6 +67,15 @@ export function krErrorResponse(
     );
   }
   if (err instanceof SkillRegistryUnavailableError) {
+    return Response.json(
+      {
+        error: err.message,
+        code: err.code,
+      },
+      { status: err.status },
+    );
+  }
+  if (err instanceof StoryPatchRequestError || err instanceof StoryRevisionConflictError) {
     return Response.json(
       {
         error: err.message,

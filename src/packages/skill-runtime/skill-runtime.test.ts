@@ -12,18 +12,48 @@ import {
 } from "./index.ts";
 
 test("skill registry reports accurate license & runtime status with zero broken files", () => {
-  const report = evaluateSkillRegistry({ verifyHashes: true, workerActive: false });
+  const report = evaluateSkillRegistry({
+    verifyHashes: true,
+    workerActive: false,
+    pythonAvailable: true,
+  });
   assert.equal(report.summary.total, 9);
   assert.equal(report.summary.broken, 0);
   assert.equal(report.summary.blocked_licence, 1);
   assert.equal(report.summary.unavailable_incompatible, 1);
   assert.equal(report.summary.dev_only_not_production, 1);
   assert.equal(report.summary.ready, 2);
+  assert.equal(report.summary.execution_ready, 2);
+  assert.equal(report.summary.provisioned_files_ready, 6);
   assert.equal(report.summary.waiting_worker, 4);
 
   const lemoDocs = report.skills.find((s) => s.skill_id === "lemo.style_docs");
   assert.equal(lemoDocs?.status, "blocked_licence");
   assert.equal(lemoDocs?.spdx_license, "CC-BY-NC-4.0");
+});
+
+test("serverless Node without Python distinguishes provisioned files from execution readiness", () => {
+  const serverlessReport = evaluateSkillRegistry({
+    verifyHashes: true,
+    workerActive: false,
+    pythonAvailable: false,
+  });
+  assert.equal(serverlessReport.python_available, false);
+  assert.equal(serverlessReport.summary.broken, 0);
+  assert.equal(serverlessReport.summary.provisioned_files_ready, 6);
+  assert.equal(serverlessReport.summary.execution_ready, 0);
+  assert.equal(serverlessReport.summary.ready, 0);
+  assert.equal(serverlessReport.summary.waiting_worker, 6);
+
+  const yt = serverlessReport.skills.find((s) => s.skill_id === "youtube.agent");
+  const cin = serverlessReport.skills.find((s) => s.skill_id === "cinematic.director");
+  assert.equal(yt?.files_verified, true);
+  assert.equal(yt?.execution_ready, false);
+  assert.equal(yt?.status, "waiting_worker");
+  assert.match(yt?.execution_note ?? "", /Python3 runtime is unavailable/i);
+  assert.equal(cin?.files_verified, true);
+  assert.equal(cin?.execution_ready, false);
+  assert.equal(cin?.status, "waiting_worker");
 });
 
 test("task instruction loader loads only approved MIT/Apache instructions and excludes CC-BY-NC-4.0", () => {

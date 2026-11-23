@@ -191,13 +191,14 @@ export function StudioDrawers({ drawer, workspace, onClose, onRefresh }: Drawers
 
               {/* Section 33 Skills & Tools Status Panel */}
               <div className="kr-card rounded-2xl p-4">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
                     <Wrench className="h-4 w-4 text-violet-400" />
                     Skills & Tools (Section 33)
                   </h3>
                   <span className="text-[11px] text-[var(--kr-muted)]">
-                    {workspace.skillsReport.summary.ready} ready ·{" "}
+                    {workspace.skillsReport.summary.execution_ready} executable ·{" "}
+                    {workspace.skillsReport.summary.provisioned_files_ready} provisioned ·{" "}
                     {workspace.skillsReport.summary.waiting_worker} worker ·{" "}
                     {workspace.skillsReport.summary.blocked_licence} blocked
                   </span>
@@ -245,9 +246,13 @@ export function StudioDrawers({ drawer, workspace, onClose, onRefresh }: Drawers
                       <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-[var(--kr-muted)]">
                         <span>{skill.spdx_license}</span>
                         <span>· {skill.runtime}</span>
-                        <span>· {skill.verified_files}/{skill.total_files} verified</span>
+                        <span>
+                          · {skill.verified_files}/{skill.total_files} files{" "}
+                          {skill.files_verified ? "provisioned" : "unverified"}
+                        </span>
+                        <span>· {skill.execution_ready ? "executable" : "not executable here"}</span>
                       </div>
-                      <p className="mt-1 text-[11px] text-slate-400">{skill.notes}</p>
+                      <p className="mt-1 text-[11px] text-slate-300">{skill.execution_note}</p>
                     </div>
                   ))}
                 </div>

@@ -13,6 +13,7 @@ export const Route = createFileRoute("/api/kr/story/propose")({
         const body = (await request.json().catch(() => ({}))) as {
           project_id?: string;
           instruction?: string;
+          expected_story_revision_id?: string;
         };
         if (!body.project_id || !body.instruction?.trim()) {
           return Response.json(
@@ -26,6 +27,7 @@ export const Route = createFileRoute("/api/kr/story/propose")({
             auth.userId,
             body.project_id,
             body.instruction.trim(),
+            body.expected_story_revision_id,
           );
           return Response.json(result);
         } catch (err) {

@@ -1,7 +1,7 @@
 {
   "schema_version": "kr.skills.status.v1",
   "profile": "app",
-  "checked_at": "2026-11-22T16:19:13.734Z",
+  "checked_at": "2026-11-23T13:58:00.039Z",
   "environment": {
     "nodeVersion": "22.22.3",
     "nodeMajor": 22,

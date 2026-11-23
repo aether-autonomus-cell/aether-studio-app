@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -69,6 +70,9 @@ export interface SkillRuntimeRecord {
   adapter: string | null;
   tools: string[];
   status: SkillStatus;
+  files_verified: boolean;
+  execution_ready: boolean;
+  execution_note: string;
   verified_files: number;
   total_files: number;
   missing_files: string[];
@@ -80,9 +84,12 @@ export interface SkillRegistryReport {
   schema_version: "kr.skills.status.v1";
   checked_at: string;
   worker_active: boolean;
+  python_available: boolean;
   summary: {
     total: number;
     ready: number;
+    provisioned_files_ready: number;
+    execution_ready: number;
     waiting_worker: number;
     blocked_licence: number;
     unavailable_incompatible: number;
@@ -90,6 +97,22 @@ export interface SkillRegistryReport {
     broken: number;
   };
   skills: SkillRuntimeRecord[];
+}
+
+let cachedPythonAvailable: boolean | null = null;
+
+export function hasPythonRuntime(): boolean {
+  if (cachedPythonAvailable !== null) return cachedPythonAvailable;
+  try {
+    const res = spawnSync("python3", ["--version"], {
+      encoding: "utf8",
+      timeout: 2000,
+    });
+    cachedPythonAvailable = !res.error && res.status === 0;
+  } catch {
+    cachedPythonAvailable = false;
+  }
+  return cachedPythonAvailable;
 }
 
 let cachedLock: { root: string; doc: SkillsLockDocument } | null = null;
@@ -180,9 +203,11 @@ function sha256File(absPath: string): string {
 export function evaluateSkillRegistry(opts?: {
   verifyHashes?: boolean;
   workerActive?: boolean;
+  pythonAvailable?: boolean;
 }): SkillRegistryReport {
   const verifyHashes = opts?.verifyHashes ?? true;
   const workerActive = opts?.workerActive ?? process.env.KR_WORKER_ACTIVE === "1";
+  const pythonAvailable = opts?.pythonAvailable ?? hasPythonRuntime();
   const root = resolveSkillsRoot();
   const lock = loadSkillsLock();
 
@@ -202,6 +227,9 @@ export function evaluateSkillRegistry(opts?: {
         adapter: skill.adapter,
         tools: [],
         status: "blocked_licence",
+        files_verified: false,
+        execution_ready: false,
+        execution_note: `Blocked by commercial license gate (${skill.spdx_license}).`,
         verified_files: 0,
         total_files: 0,
         missing_files: [],
@@ -224,6 +252,9 @@ export function evaluateSkillRegistry(opts?: {
         adapter: skill.adapter,
         tools: [],
         status: "unavailable_incompatible",
+        files_verified: false,
+        execution_ready: false,
+        execution_note: skill.notes,
         verified_files: 0,
         total_files: 0,
         missing_files: [],
@@ -246,6 +277,9 @@ export function evaluateSkillRegistry(opts?: {
         adapter: skill.adapter,
         tools: [],
         status: "dev_only_not_production",
+        files_verified: false,
+        execution_ready: false,
+        execution_note: skill.notes,
         verified_files: 0,
         total_files: 0,
         missing_files: [],
@@ -280,13 +314,36 @@ export function evaluateSkillRegistry(opts?: {
       verified += 1;
     }
 
+    const filesVerified = missingFiles.length === 0 && hashMismatches.length === 0;
+    const needsPython = skill.entrypoint_files.some((f) => f.path.endsWith(".py"));
+
     let status: SkillStatus = skill.initial_status;
-    if (missingFiles.length > 0 || hashMismatches.length > 0) {
+    let executionReady = false;
+    let executionNote = skill.notes;
+
+    if (!filesVerified) {
       status = "broken";
+      executionReady = false;
+      executionNote = "Provisioned skill manifest or asset files are missing or mismatched.";
     } else if (skill.runtime.startsWith("worker.")) {
       status = workerActive ? "ready" : "waiting_worker";
+      executionReady = workerActive;
+      executionNote = workerActive
+        ? "Provisioned worker files verified and paired worker session is active."
+        : "Provisioned files verified on disk; execution requires a paired Colab/local worker.";
     } else if (skill.runtime === "app.server") {
-      status = "ready";
+      if (needsPython && !pythonAvailable) {
+        status = "waiting_worker";
+        executionReady = false;
+        executionNote =
+          "Provisioned Python scripts verified on disk, but Python3 runtime is unavailable in this serverless Node environment; execution requires a paired Colab/local Python worker.";
+      } else {
+        status = "ready";
+        executionReady = true;
+        executionNote = needsPython
+          ? "Provisioned files verified and Python3 runtime active on server."
+          : "Provisioned files verified and runnable on server.";
+      }
     }
 
     return {
@@ -302,6 +359,9 @@ export function evaluateSkillRegistry(opts?: {
       adapter: skill.adapter,
       tools: skill.tools,
       status,
+      files_verified: filesVerified,
+      execution_ready: executionReady,
+      execution_note: executionNote,
       verified_files: verified,
       total_files: allFiles.length,
       missing_files: missingFiles,
@@ -314,9 +374,12 @@ export function evaluateSkillRegistry(opts?: {
     schema_version: "kr.skills.status.v1",
     checked_at: new Date().toISOString(),
     worker_active: workerActive,
+    python_available: pythonAvailable,
     summary: {
       total: records.length,
       ready: records.filter((r) => r.status === "ready").length,
+      provisioned_files_ready: records.filter((r) => r.files_verified).length,
+      execution_ready: records.filter((r) => r.execution_ready).length,
       waiting_worker: records.filter((r) => r.status === "waiting_worker").length,
       blocked_licence: records.filter((r) => r.status === "blocked_licence").length,
       unavailable_incompatible: records.filter((r) => r.status === "unavailable_incompatible").length,
