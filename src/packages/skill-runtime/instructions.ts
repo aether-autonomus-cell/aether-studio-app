@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { loadSkillsLock } from "./registry.ts";
+import { loadSkillsLock, resolveSkillsRoot } from "./registry.ts";
 
 export type SkillTaskDomain = "story" | "director" | "editing" | "packaging" | "captions";
 
@@ -44,8 +44,8 @@ export function loadTaskInstructions(
   domain: SkillTaskDomain,
   maxCharsPerFile = 2400,
 ): LoadedInstructionChunk[] {
+  const root = resolveSkillsRoot();
   const lock = loadSkillsLock();
-  const root = process.cwd();
   const allowedSkillIds = new Set(TASK_SKILL_MAP[domain]);
   const matcher = FILE_TASK_FILTER[domain];
   const chunks: LoadedInstructionChunk[] = [];

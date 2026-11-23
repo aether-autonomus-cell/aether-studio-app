@@ -24,7 +24,8 @@ import {
   saveSettingsRevision,
   saveTimelineEditRevision,
 } from "./repository.ts";
-import { ProjectNotFoundError } from "./route-errors.ts";
+import { SkillRegistryUnavailableError } from "../../packages/skill-runtime/registry.ts";
+import { ProjectNotFoundError, krErrorResponse } from "./route-errors.ts";
 
 describe("Database Configuration Policy (No Silent Ephemeral PGLite)", () => {
   it("fails closed in preview and production when DATABASE_URL is missing, even with KR_LOCAL_FIXTURE_DB=true", () => {
@@ -544,5 +545,28 @@ describe("Google OAuth + Server-Side Owner Allowlist Enforcement", () => {
     } finally {
       await pg.close();
     }
+  });
+
+  it("sanitizes internal server filesystem paths and returns structured error for unavailable skill registry", async () => {
+    const regResp = krErrorResponse(
+      new SkillRegistryUnavailableError(),
+      "Failed to load workspace",
+      500,
+    );
+    assert.equal(regResp.status, 500);
+    const regJson = (await regResp.json()) as { error: string; code?: string };
+    assert.equal(regJson.code, "SKILLS_REGISTRY_UNAVAILABLE");
+    assert.ok(!regJson.error.includes("/var/task"));
+
+    const enoentResp = krErrorResponse(
+      new Error("ENOENT: no such file or directory, open '/var/task/skills.lock.json'"),
+      "Failed to load workspace",
+      500,
+    );
+    assert.equal(enoentResp.status, 500);
+    const enoentJson = (await enoentResp.json()) as { error: string };
+    assert.equal(enoentJson.error, "Failed to load workspace");
+    assert.ok(!enoentJson.error.includes("/var/task"));
+    assert.ok(!enoentJson.error.includes("ENOENT"));
   });
 });

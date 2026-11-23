@@ -1,6 +1,15 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { dispatchSkillTool, evaluateSkillRegistry, loadTaskInstructions } from "./index.ts";
+import { packageSkillsIntoServerDir } from "../../../scripts/package-skills-bundle.mjs";
+import {
+  dispatchSkillTool,
+  evaluateSkillRegistry,
+  loadTaskInstructions,
+  SkillRegistryUnavailableError,
+} from "./index.ts";
 
 test("skill registry reports accurate license & runtime status with zero broken files", () => {
   const report = evaluateSkillRegistry({ verifyHashes: true, workerActive: false });
@@ -69,4 +78,65 @@ test("dispatcher executes real vendored YouTube & Cinematic Python skill tools",
   });
   assert.equal(beatsRes.ok, true, beatsRes.error ?? undefined);
   assert.ok((beatsRes.data as { beats_markdown: string }).beats_markdown.includes("Stepwell Echoes"));
+});
+
+test("packageSkillsIntoServerDir packages lockfile, manifests, and vendor assets for isolated server execution", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "kr-bundle-"));
+  const serverDir = path.join(tmpDir, "__server.func");
+  const prevRoot = process.env.KR_SKILLS_ROOT;
+  try {
+    packageSkillsIntoServerDir(process.cwd(), serverDir);
+    assert.ok(fs.existsSync(path.join(serverDir, "skills.lock.json")));
+    assert.ok(fs.existsSync(path.join(serverDir, "skills", "manifests", "cinematic.director.json")));
+    assert.ok(fs.existsSync(path.join(serverDir, "skills", "registry-status.json")));
+    assert.ok(
+      fs.existsSync(
+        path.join(
+          serverDir,
+          "skills",
+          "vendor",
+          "youtube-agent-skill",
+          "skills",
+          "yt-script",
+          "hookscore.py",
+        ),
+      ),
+    );
+
+    process.env.KR_SKILLS_ROOT = serverDir;
+    const report = evaluateSkillRegistry({ verifyHashes: true, workerActive: false });
+    assert.equal(report.summary.broken, 0);
+    assert.equal(report.summary.ready, 2);
+    assert.equal(report.summary.waiting_worker, 4);
+
+    const storyChunks = loadTaskInstructions("story");
+    assert.ok(storyChunks.length >= 3);
+  } finally {
+    if (prevRoot === undefined) delete process.env.KR_SKILLS_ROOT;
+    else process.env.KR_SKILLS_ROOT = prevRoot;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("missing skill registry fails closed without mock fallback or path exposure", () => {
+  const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "kr-empty-skills-"));
+  const prevRoot = process.env.KR_SKILLS_ROOT;
+  try {
+    process.env.KR_SKILLS_ROOT = emptyDir;
+    assert.throws(
+      () => evaluateSkillRegistry({ verifyHashes: true }),
+      (err: unknown) => {
+        assert.ok(err instanceof SkillRegistryUnavailableError);
+        assert.equal(err.code, "SKILLS_REGISTRY_UNAVAILABLE");
+        assert.ok(!err.message.includes(emptyDir));
+        assert.ok(!err.message.includes("/var/task"));
+        return true;
+      },
+    );
+    assert.throws(() => packageSkillsIntoServerDir(emptyDir, path.join(emptyDir, "out")));
+  } finally {
+    if (prevRoot === undefined) delete process.env.KR_SKILLS_ROOT;
+    else process.env.KR_SKILLS_ROOT = prevRoot;
+    fs.rmSync(emptyDir, { recursive: true, force: true });
+  }
 });

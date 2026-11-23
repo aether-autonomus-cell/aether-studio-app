@@ -1,4 +1,5 @@
 import { DatabaseConfigurationError } from "../../lib/db-policy.ts";
+import { SkillRegistryUnavailableError } from "../../packages/skill-runtime/registry.ts";
 import { AuthConfigurationError, OwnerForbiddenError } from "./auth-policy.ts";
 
 export class ProjectNotFoundError extends Error {
@@ -9,6 +10,16 @@ export class ProjectNotFoundError extends Error {
     super(message);
     this.name = "ProjectNotFoundError";
   }
+}
+
+const INTERNAL_FS_ERROR_RE =
+  /\b(ENOENT|EACCES|EPERM|EISDIR|ENOTDIR|EMFILE)\b|\/(var\/task|home|tmp|Users|app)\//i;
+
+export function sanitizePublicErrorMessage(rawMessage: string, fallbackMessage: string): string {
+  if (!rawMessage || INTERNAL_FS_ERROR_RE.test(rawMessage)) {
+    return fallbackMessage;
+  }
+  return rawMessage;
 }
 
 export function krErrorResponse(
@@ -44,7 +55,17 @@ export function krErrorResponse(
       { status: err.status },
     );
   }
-  const msg = err instanceof Error ? err.message : fallbackMessage;
+  if (err instanceof SkillRegistryUnavailableError) {
+    return Response.json(
+      {
+        error: err.message,
+        code: err.code,
+      },
+      { status: err.status },
+    );
+  }
+  const rawMsg = err instanceof Error ? err.message : fallbackMessage;
+  const msg = sanitizePublicErrorMessage(rawMsg, fallbackMessage);
   const status = msg.includes("lease_token") || msg.includes("worker_session_id") ? 409 : defaultStatus;
   return Response.json({ error: msg }, { status });
 }
