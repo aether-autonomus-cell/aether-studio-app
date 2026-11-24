@@ -194,6 +194,8 @@ describe("Wrong-Owner Isolation & Worker Lease/Session Fencing", () => {
 
       const projA = wsA.project.project_id;
       const proposed = await createStoryPatchProposal(ownerA, projA, "Increase cliffhanger tension in scene 2");
+      assert.ok(proposed.patch);
+      const proposedPatchId = proposed.patch.patch_id;
 
       // Attacker B cannot read or mutate Owner A's project
       await assert.rejects(() => loadWorkspaceState(attackerB, projA), ProjectNotFoundError);
@@ -206,7 +208,7 @@ describe("Wrong-Owner Isolation & Worker Lease/Session Fencing", () => {
           resolveStoryPatch({
             userId: attackerB,
             projectId: projA,
-            patchId: proposed.patch.patch_id,
+            patchId: proposedPatchId,
             action: "accept",
           }),
         ProjectNotFoundError,

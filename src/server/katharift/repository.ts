@@ -17,6 +17,10 @@ import {
 } from "../../packages/contracts/schemas.ts";
 import { KR_FPS, KR_SAMPLE_RATE } from "../../packages/contracts/timing.ts";
 import {
+  PAIRING_CODE_TTL_MS,
+  classifyWorkerSessionState,
+} from "../../packages/contracts/worker-session.ts";
+import {
   applyStoryPatchToBible,
   buildDefaultStoryBible,
   defaultSettingsSnapshot,
@@ -220,7 +224,18 @@ export async function loadWorkspaceState(userId: string, projectId: string) {
     LIMIT 10
   `;
 
-  const workerSessions = await sql<{
+  const pairingExpiryCutoff = new Date(Date.now() - PAIRING_CODE_TTL_MS).toISOString();
+  await sql`
+    UPDATE kr_worker_sessions
+    SET status = 'expired'
+    WHERE project_id = ${projectId}
+      AND user_id = ${userId}
+      AND status = 'paired'
+      AND last_heartbeat_at IS NULL
+      AND created_at < ${pairingExpiryCutoff}::timestamptz
+  `;
+
+  const workerSessionsRaw = await sql<{
     worker_session_id: string;
     runtime_kind: string;
     status: string;
@@ -232,8 +247,17 @@ export async function loadWorkspaceState(userId: string, projectId: string) {
     FROM kr_worker_sessions
     WHERE project_id = ${projectId} AND user_id = ${userId}
     ORDER BY created_at DESC
-    LIMIT 5
+    LIMIT 8
   `;
+
+  const nowMs = Date.now();
+  const workerSessions = workerSessionsRaw.map((w) => {
+    const classified = classifyWorkerSessionState(w, nowMs);
+    return {
+      ...w,
+      ...classified,
+    };
+  });
 
   const exportsRows = await sql<{
     export_id: string;
@@ -310,7 +334,7 @@ export async function loadWorkspaceState(userId: string, projectId: string) {
         `
       : [];
 
-  const activeWorker = workerSessions.some((w) => w.status === "active");
+  const activeWorker = workerSessions.some((w) => w.is_connected);
   const skillsReport = evaluateSkillRegistry({ verifyHashes: false, workerActive: activeWorker });
   const dbPolicy = getDbPolicy();
 
@@ -442,10 +466,20 @@ export async function createStoryPatchProposal(
     await recordSkillTrace(userId, projectId, trace);
   }
 
-  const { patch, assistantMessage } = proposeStoryPatch({
+  const { patch, noOp, assistantMessage } = proposeStoryPatch({
     revision: state.storyRevision,
     instruction,
   });
+
+  if (noOp || !patch) {
+    return {
+      patch: null,
+      noOp: true,
+      assistantMessage,
+      instructionsLoaded: guidance.instructionsLoaded,
+      skillTraces: guidance.skillTraces,
+    };
+  }
 
   const sql = await getSql();
   await sql`
@@ -459,6 +493,7 @@ export async function createStoryPatchProposal(
 
   return {
     patch,
+    noOp: false,
     assistantMessage,
     instructionsLoaded: guidance.instructionsLoaded,
     skillTraces: guidance.skillTraces,
@@ -500,15 +535,41 @@ export async function resolveStoryPatch(params: {
     }
     effectivePatch = rebased.rebasedPatch;
     if (action === "rebase") {
+      if (rebased.alreadyApplied || effectivePatch.operations.length === 0) {
+        await sql`
+          UPDATE kr_story_patches
+          SET base_story_revision_id = ${effectivePatch.base_story_revision_id},
+              status = 'accepted',
+              summary = ${effectivePatch.summary},
+              operations_json = ${JSON.stringify(effectivePatch.operations)}::jsonb,
+              resolved_at = NOW()
+          WHERE patch_id = ${patchId} AND user_id = ${userId}
+        `;
+        return {
+          status: "already_applied" as const,
+          patch: effectivePatch,
+          storyRevision: state.storyRevision,
+        };
+      }
       await sql`
         UPDATE kr_story_patches
         SET base_story_revision_id = ${effectivePatch.base_story_revision_id},
             status = 'rebased',
-            summary = ${effectivePatch.summary}
+            summary = ${effectivePatch.summary},
+            operations_json = ${JSON.stringify(effectivePatch.operations)}::jsonb
         WHERE patch_id = ${patchId} AND user_id = ${userId}
       `;
       return { status: "rebased" as const, patch: effectivePatch, storyRevision: state.storyRevision };
     }
+  }
+
+  if (effectivePatch.operations.length === 0) {
+    await sql`
+      UPDATE kr_story_patches
+      SET status = 'accepted', resolved_at = NOW()
+      WHERE patch_id = ${patchId} AND user_id = ${userId}
+    `;
+    return { status: "already_applied" as const, storyRevision: state.storyRevision };
   }
 
   const nextBible = applyStoryPatchToBible(state.storyRevision.bible, effectivePatch);
@@ -738,6 +799,7 @@ export async function createWorkerPairingSession(
   const workerSessionId = newId("ws");
   const pairingCode = `KR-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
   const codeHash = hashPairingCode(pairingCode);
+  const expiresAt = new Date(Date.now() + PAIRING_CODE_TTL_MS).toISOString();
 
   await sql`
     INSERT INTO kr_worker_sessions (
@@ -751,7 +813,38 @@ export async function createWorkerPairingSession(
     worker_session_id: workerSessionId,
     pairing_code: pairingCode,
     runtime_kind: runtimeKind,
+    lifecycle_state: "awaiting_worker" as const,
+    expires_at: expiresAt,
   };
+}
+
+export async function revokeWorkerPairingSession(
+  userId: string,
+  projectId: string,
+  workerSessionId: string,
+) {
+  const sql = await getSql();
+  const owned = await sql<{ project_id: string }>`
+    SELECT project_id FROM kr_projects
+    WHERE project_id = ${projectId} AND user_id = ${userId}
+    LIMIT 1
+  `;
+  if (owned.length === 0) {
+    throw new ProjectNotFoundError("Project not found");
+  }
+
+  const updated = await sql<{ worker_session_id: string; status: string }>`
+    UPDATE kr_worker_sessions
+    SET status = 'revoked'
+    WHERE worker_session_id = ${workerSessionId}
+      AND project_id = ${projectId}
+      AND user_id = ${userId}
+    RETURNING worker_session_id, status
+  `;
+  if (updated.length === 0) {
+    throw new Error("Worker pairing session not found");
+  }
+  return { worker_session_id: updated[0].worker_session_id, status: "revoked" as const };
 }
 
 export async function claimJobForWorker(params: {
@@ -765,8 +858,11 @@ export async function claimJobForWorker(params: {
     worker_session_id: string;
     user_id: string;
     project_id: string;
+    status: string;
+    last_heartbeat_at: string | null;
+    created_at: string;
   }>`
-    SELECT worker_session_id, user_id, project_id
+    SELECT worker_session_id, user_id, project_id, status, last_heartbeat_at::text, created_at::text
     FROM kr_worker_sessions
     WHERE pairing_code_hash = ${codeHash} AND status IN ('paired', 'active')
     ORDER BY created_at DESC
@@ -778,14 +874,17 @@ export async function claimJobForWorker(params: {
   }
   const session = sessions[0];
 
-  await sql`
-    UPDATE kr_worker_sessions
-    SET status = 'active',
-        gpu_name = ${params.gpuName ?? "Colab Free GPU"},
-        capabilities_json = ${JSON.stringify(params.capabilities ?? {})}::jsonb,
-        last_heartbeat_at = NOW()
-    WHERE worker_session_id = ${session.worker_session_id}
-  `;
+  if (
+    session.last_heartbeat_at === null &&
+    Date.now() - Date.parse(session.created_at) > PAIRING_CODE_TTL_MS
+  ) {
+    await sql`
+      UPDATE kr_worker_sessions
+      SET status = 'expired'
+      WHERE worker_session_id = ${session.worker_session_id}
+    `;
+    throw new Error("Worker pairing code expired; generate a new pairing code");
+  }
 
   const jobs = await sql<{ job_id: string; job_json: unknown }>`
     SELECT job_id, job_json
@@ -799,8 +898,29 @@ export async function claimJobForWorker(params: {
   `;
 
   if (jobs.length === 0) {
-    return { worker_session_id: session.worker_session_id, job: null };
+    await sql`
+      UPDATE kr_worker_sessions
+      SET status = 'paired',
+          gpu_name = ${params.gpuName ?? "Colab Free GPU"},
+          capabilities_json = ${JSON.stringify(params.capabilities ?? {})}::jsonb,
+          last_heartbeat_at = NOW()
+      WHERE worker_session_id = ${session.worker_session_id}
+    `;
+    return {
+      worker_session_id: session.worker_session_id,
+      lifecycle_state: "authenticated_paired" as const,
+      job: null,
+    };
   }
+
+  await sql`
+    UPDATE kr_worker_sessions
+    SET status = 'active',
+        gpu_name = ${params.gpuName ?? "Colab Free GPU"},
+        capabilities_json = ${JSON.stringify(params.capabilities ?? {})}::jsonb,
+        last_heartbeat_at = NOW()
+    WHERE worker_session_id = ${session.worker_session_id}
+  `;
 
   const leaseToken = newId("lease");
   const leaseExpires = new Date(Date.now() + 120_000).toISOString();
