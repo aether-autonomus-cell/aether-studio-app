@@ -12,7 +12,24 @@ import type { SkillRegistryReport } from "@/packages/skill-runtime/registry";
 import type { WorkerSessionLifecycleState } from "@/packages/contracts/worker-session";
 
 export type PrimaryTab = "story" | "production" | "editor" | "exports";
-export type StudioDrawer = "none" | "settings" | "canon" | "assets" | "connections" | "activity";
+export type StudioDrawer =
+  | "none"
+  | "projects"
+  | "settings"
+  | "canon"
+  | "assets"
+  | "connections"
+  | "activity";
+
+export interface WorkspaceProjectSummary {
+  project_id: string;
+  title: string;
+  logline: string;
+  story_version: number;
+  timeline_version: number;
+  job_count: number;
+  updated_at: string;
+}
 
 export interface WorkspaceSnapshot {
   runtime?: {
@@ -30,6 +47,7 @@ export interface WorkspaceSnapshot {
     version: number;
     updated_at: string;
   };
+  projects: WorkspaceProjectSummary[];
   storyRevision: KrStoryRevision;
   settingsRevision: KrSettingsRevision;
   timelineRevisionId: string;

@@ -45,15 +45,27 @@ export function defaultSettingsSnapshot(): KrSettingsSnapshot {
   };
 }
 
-export function buildDefaultStoryBible(projectId: string, customPrompt?: string): KrStoryBible {
-  const promptHint = customPrompt?.trim();
-  const title = promptHint ? promptHint.slice(0, 56) : "Stepwell Echoes — बावड़ी की गूँज";
+export function buildDefaultStoryBible(
+  projectId: string,
+  customPrompt?: string | { title?: string; logline?: string },
+): KrStoryBible {
+  const customTitle =
+    typeof customPrompt === "string"
+      ? customPrompt.trim()
+      : customPrompt?.title?.trim();
+  const customLogline =
+    typeof customPrompt === "string"
+      ? customPrompt.trim()
+      : customPrompt?.logline?.trim();
+  const title = customTitle ? customTitle.slice(0, 80) : "Stepwell Echoes — बावड़ी की गूँज";
   return {
     project_id: projectId,
     title,
     logline:
-      promptHint ||
-      "When monsoon dusk falls over an abandoned sandstone stepwell, archivist Meera decodes glowing Devanagari inscriptions that awaken forgotten water songs.",
+      customLogline ||
+      (customTitle
+        ? `${customTitle} — bilingual anime story project.`
+        : "When monsoon dusk falls over an abandoned sandstone stepwell, archivist Meera decodes glowing Devanagari inscriptions that awaken forgotten water songs."),
     style_bible:
       "Restrained twilight anime cinema, clean architectural linework, sandstone amber lantern key light against deep indigo twilight, 16:9 composition.",
     aspect_ratio: "16:9",

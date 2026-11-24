@@ -56,36 +56,67 @@ function parseJsonCol<T>(val: unknown): T {
   return val as T;
 }
 
-export async function getOrCreateActiveWorkspace(userId: string) {
+export interface KrProjectSummary {
+  project_id: string;
+  title: string;
+  logline: string;
+  story_version: number;
+  timeline_version: number;
+  job_count: number;
+  updated_at: string;
+}
+
+export async function listUserProjects(userId: string): Promise<KrProjectSummary[]> {
   const sql = await getSql();
-  const existing = await sql<{
+  const rows = await sql<{
     project_id: string;
     title: string;
     logline: string;
-    current_story_revision_id: string;
-    current_settings_revision_id: string;
-    current_timeline_revision_id: string;
-    version: number;
+    story_version: number | null;
+    timeline_version: number | null;
+    job_count: string | number;
+    updated_at: string;
   }>`
-    SELECT project_id, title, logline, current_story_revision_id, current_settings_revision_id, current_timeline_revision_id, version
-    FROM kr_projects
-    WHERE user_id = ${userId}
-    ORDER BY updated_at DESC
-    LIMIT 1
+    SELECT
+      p.project_id,
+      p.title,
+      p.logline,
+      sr.version AS story_version,
+      tr.version AS timeline_version,
+      (SELECT COUNT(*) FROM kr_jobs j WHERE j.project_id = p.project_id AND j.user_id = p.user_id) AS job_count,
+      p.updated_at::text
+    FROM kr_projects p
+    LEFT JOIN kr_story_revisions sr
+      ON sr.revision_id = p.current_story_revision_id AND sr.user_id = p.user_id
+    LEFT JOIN kr_timeline_revisions tr
+      ON tr.timeline_revision_id = p.current_timeline_revision_id AND tr.user_id = p.user_id
+    WHERE p.user_id = ${userId}
+    ORDER BY p.updated_at DESC
+    LIMIT 25
   `;
+  return rows.map((r) => ({
+    project_id: r.project_id,
+    title: r.title,
+    logline: r.logline,
+    story_version: Number(r.story_version ?? 1),
+    timeline_version: Number(r.timeline_version ?? 1),
+    job_count: Number(r.job_count ?? 0),
+    updated_at: r.updated_at,
+  }));
+}
 
-  if (existing.length > 0) {
-    return loadWorkspaceState(userId, existing[0].project_id);
-  }
-
-  // Create starter project + immutable v1 story, settings, and timeline revisions
+export async function createNewProject(
+  userId: string,
+  options?: { title?: string; logline?: string },
+) {
+  const sql = await getSql();
   const projectId = newId("proj");
   const storyRevId = newId("srev");
   const settingsRevId = newId("set");
   const timelineRevId = newId("trev");
   const timelineId = newId("tl");
 
-  const bible = buildDefaultStoryBible(projectId);
+  const bible = buildDefaultStoryBible(projectId, options);
   const settings = defaultSettingsSnapshot();
   const timeline = buildTimelineFromStory({
     timeline_id: timelineId,
@@ -131,6 +162,29 @@ export async function getOrCreateActiveWorkspace(userId: string) {
   `;
 
   return loadWorkspaceState(userId, projectId);
+}
+
+export async function getOrCreateActiveWorkspace(userId: string, requestedProjectId?: string) {
+  if (requestedProjectId) {
+    return loadWorkspaceState(userId, requestedProjectId);
+  }
+
+  const sql = await getSql();
+  const existing = await sql<{
+    project_id: string;
+  }>`
+    SELECT project_id
+    FROM kr_projects
+    WHERE user_id = ${userId}
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `;
+
+  if (existing.length > 0) {
+    return loadWorkspaceState(userId, existing[0].project_id);
+  }
+
+  return createNewProject(userId);
 }
 
 export async function loadWorkspaceState(userId: string, projectId: string) {
@@ -337,6 +391,7 @@ export async function loadWorkspaceState(userId: string, projectId: string) {
   const activeWorker = workerSessions.some((w) => w.is_connected);
   const skillsReport = evaluateSkillRegistry({ verifyHashes: false, workerActive: activeWorker });
   const dbPolicy = getDbPolicy();
+  const projects = await listUserProjects(userId);
 
   return {
     runtime: {
@@ -345,6 +400,7 @@ export async function loadWorkspaceState(userId: string, projectId: string) {
       label: dbPolicy.label,
     },
     project,
+    projects,
     storyRevision: {
       revision_id: storyRow.revision_id,
       project_id: projectId,

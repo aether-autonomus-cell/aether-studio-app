@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ShieldAlert, ShieldCheck, Wrench, X } from "lucide-react";
+import { FolderPlus, ShieldAlert, ShieldCheck, Wrench, X } from "lucide-react";
 import { FREE_ROUTE_ALLOWLIST, type FreeRouteId } from "@/packages/contracts/schemas";
 import { classifyClipMediaStatus } from "@/packages/editor/media-status";
 import { krApiFetch, type StudioDrawer, type WorkspaceSnapshot } from "./types";
@@ -9,6 +9,8 @@ interface DrawersProps {
   workspace: WorkspaceSnapshot;
   onClose: () => void;
   onRefresh: () => Promise<void>;
+  onSelectProject: (projectId: string) => Promise<void>;
+  onCreateProject: (input: { title: string; logline: string }) => Promise<void>;
 }
 
 const STATUS_BADGE: Record<string, string> = {
@@ -20,7 +22,14 @@ const STATUS_BADGE: Record<string, string> = {
   broken: "bg-rose-600/30 text-rose-100",
 };
 
-export function StudioDrawers({ drawer, workspace, onClose, onRefresh }: DrawersProps) {
+export function StudioDrawers({
+  drawer,
+  workspace,
+  onClose,
+  onRefresh,
+  onSelectProject,
+  onCreateProject,
+}: DrawersProps) {
   const [route, setRoute] = useState<FreeRouteId>(
     workspace.settingsRevision.snapshot.director_route,
   );
@@ -28,6 +37,12 @@ export function StudioDrawers({ drawer, workspace, onClose, onRefresh }: Drawers
   const [enVoice, setEnVoice] = useState(workspace.settingsRevision.snapshot.voices.en.voice_id);
   const [savingSettings, setSavingSettings] = useState(false);
   const [toolResult, setToolResult] = useState<string | null>(null);
+
+  const [newProjectTitle, setNewProjectTitle] = useState("");
+  const [newProjectLogline, setNewProjectLogline] = useState("");
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [openingProjectId, setOpeningProjectId] = useState<string | null>(null);
+  const [projectError, setProjectError] = useState<string | null>(null);
 
   const [connProvider, setConnProvider] = useState<
     "google_drive" | "google_gemini_free" | "groq_free" | "openrouter_free"
@@ -37,6 +52,40 @@ export function StudioDrawers({ drawer, workspace, onClose, onRefresh }: Drawers
   const [connMsg, setConnMsg] = useState<string | null>(null);
 
   if (drawer === "none") return null;
+
+  async function handleCreateProjectSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (creatingProject) return;
+    setCreatingProject(true);
+    setProjectError(null);
+    try {
+      await onCreateProject({
+        title: newProjectTitle.trim(),
+        logline: newProjectLogline.trim(),
+      });
+      setNewProjectTitle("");
+      setNewProjectLogline("");
+      onClose();
+    } catch (err) {
+      setProjectError(err instanceof Error ? err.message : "Failed to create project");
+    } finally {
+      setCreatingProject(false);
+    }
+  }
+
+  async function handleOpenProject(projectId: string) {
+    if (openingProjectId) return;
+    setOpeningProjectId(projectId);
+    setProjectError(null);
+    try {
+      await onSelectProject(projectId);
+      onClose();
+    } catch (err) {
+      setProjectError(err instanceof Error ? err.message : "Failed to reopen project");
+    } finally {
+      setOpeningProjectId(null);
+    }
+  }
 
   async function saveSettings() {
     setSavingSettings(true);
@@ -120,6 +169,95 @@ export function StudioDrawers({ drawer, workspace, onClose, onRefresh }: Drawers
         </header>
 
         <div className="flex-1 space-y-4 overflow-y-auto p-4">
+          {drawer === "projects" && (
+            <div className="space-y-4">
+              <form
+                onSubmit={handleCreateProjectSubmit}
+                className="kr-card space-y-3 rounded-2xl p-4 text-xs"
+              >
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
+                  <FolderPlus className="h-4 w-4 text-violet-400" />
+                  Create New Project
+                </h3>
+                <p className="text-[var(--kr-muted)]">
+                  Starts a fresh Story v1 + Timeline v1 without changing or deleting your existing
+                  projects, revisions, or jobs.
+                </p>
+                <input
+                  type="text"
+                  value={newProjectTitle}
+                  onChange={(e) => setNewProjectTitle(e.target.value)}
+                  placeholder="Project title (e.g., Monsoon Night Express)"
+                  className="kr-input kr-tap w-full rounded-xl px-3 py-2 text-sm"
+                />
+                <textarea
+                  rows={2}
+                  value={newProjectLogline}
+                  onChange={(e) => setNewProjectLogline(e.target.value)}
+                  placeholder="Optional logline or story premise..."
+                  className="kr-input w-full rounded-xl px-3 py-2 text-sm"
+                />
+                <button
+                  type="submit"
+                  disabled={creatingProject}
+                  className="kr-tap w-full rounded-xl bg-violet-600 py-2.5 text-sm font-semibold text-white hover:bg-violet-500 disabled:opacity-50"
+                >
+                  {creatingProject ? "Creating Project…" : "Create New Project"}
+                </button>
+                {projectError && <p className="text-rose-300">{projectError}</p>}
+              </form>
+
+              <div className="space-y-2.5">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--kr-muted)]">
+                  Your Projects ({workspace.projects.length})
+                </h3>
+                {workspace.projects.map((p) => {
+                  const isActive = p.project_id === workspace.project.project_id;
+                  return (
+                    <div
+                      key={p.project_id}
+                      className={`kr-card rounded-2xl p-3.5 text-xs ${
+                        isActive ? "border border-violet-400/50 bg-violet-500/10" : ""
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-sm font-semibold text-white">
+                              {p.title}
+                            </span>
+                            {isActive && (
+                              <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                                Active
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-1 line-clamp-2 text-[11px] text-[var(--kr-muted)]">
+                            {p.logline}
+                          </p>
+                          <div className="mt-1.5 font-mono text-[10px] text-slate-400">
+                            Story v{p.story_version} · Timeline v{p.timeline_version} · {p.job_count}{" "}
+                            job(s)
+                          </div>
+                        </div>
+                        {!isActive && (
+                          <button
+                            type="button"
+                            disabled={openingProjectId !== null}
+                            onClick={() => handleOpenProject(p.project_id)}
+                            className="kr-tap shrink-0 rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-violet-500 disabled:opacity-50"
+                          >
+                            {openingProjectId === p.project_id ? "Opening…" : "Open"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {drawer === "settings" && (
             <>
               {/* Zero-Spend & Baseline Settings */}
