@@ -232,6 +232,10 @@ describe("Wrong-Owner Isolation & Worker Lease/Session Fencing", () => {
         ProjectNotFoundError,
       );
       await assert.rejects(
+        () => getOrCreateActiveWorkspace(attackerB, projA),
+        ProjectNotFoundError,
+      );
+      await assert.rejects(
         () =>
           saveTimelineEditRevision({
             userId: attackerB,

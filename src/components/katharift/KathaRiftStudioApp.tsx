@@ -2,9 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
   BookOpen,
+  ChevronDown,
   Clapperboard,
   Cpu,
   Download,
+  FolderKanban,
   FolderOpen,
   Link2,
   Settings,
@@ -26,6 +28,30 @@ import {
 } from "./types";
 
 const OFFLINE_DRAFT_KEY = "kr.offline.draft.v1";
+const ACTIVE_PROJECT_KEY = "kr.active.project_id.v1";
+
+function readInitialProjectId(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const urlPid = new URLSearchParams(window.location.search).get("project")?.trim();
+    if (urlPid) return urlPid;
+    return window.localStorage.getItem(ACTIVE_PROJECT_KEY)?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function persistSelectedProjectId(projectId: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(ACTIVE_PROJECT_KEY, projectId);
+    const url = new URL(window.location.href);
+    url.searchParams.set("project", projectId);
+    window.history.replaceState({}, "", url.toString());
+  } catch {
+    /* ignore storage/history failure */
+  }
+}
 
 export function KathaRiftStudioApp() {
   return (
@@ -51,6 +77,9 @@ export function KathaRiftStudioApp() {
 
 function StudioShell() {
   const [workspace, setWorkspace] = useState<WorkspaceSnapshot | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>(() =>
+    readInitialProjectId(),
+  );
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<{ message: string; code?: string } | null>(null);
   const [activeTab, setActiveTab] = useState<PrimaryTab>("story");
@@ -89,23 +118,70 @@ function StudioShell() {
     };
   }, []);
 
-  const refreshWorkspace = useCallback(async () => {
-    try {
-      setLoadError(null);
-      const data = await krApiFetch<WorkspaceSnapshot>("/api/kr/workspace");
-      setWorkspace(data);
-    } catch (err) {
-      const code =
-        err && typeof err === "object" && "code" in err && typeof (err as { code?: unknown }).code === "string"
-          ? (err as { code: string }).code
-          : undefined;
-      setLoadError({
-        message: err instanceof Error ? err.message : "Failed to load workspace",
-        code,
-      });
-    } finally {
-      setLoading(false);
-    }
+  const refreshWorkspace = useCallback(
+    async (projectIdOverride?: string) => {
+      const targetProjectId = projectIdOverride ?? selectedProjectId;
+      try {
+        setLoadError(null);
+        const query = targetProjectId
+          ? `?project_id=${encodeURIComponent(targetProjectId)}`
+          : "";
+        let data: WorkspaceSnapshot;
+        try {
+          data = await krApiFetch<WorkspaceSnapshot>(`/api/kr/workspace${query}`);
+        } catch (err) {
+          const status =
+            err && typeof err === "object" && "status" in err
+              ? (err as { status?: unknown }).status
+              : undefined;
+          // If a stored/URL project_id no longer exists, fall back cleanly to default active workspace
+          if (targetProjectId && status === 404) {
+            data = await krApiFetch<WorkspaceSnapshot>("/api/kr/workspace");
+          } else {
+            throw err;
+          }
+        }
+        setWorkspace(data);
+        setSelectedProjectId(data.project.project_id);
+        persistSelectedProjectId(data.project.project_id);
+      } catch (err) {
+        const code =
+          err && typeof err === "object" && "code" in err && typeof (err as { code?: unknown }).code === "string"
+            ? (err as { code: string }).code
+            : undefined;
+        setLoadError({
+          message: err instanceof Error ? err.message : "Failed to load workspace",
+          code,
+        });
+      } finally {
+        setLoading(false);
+      }
+    },
+    [selectedProjectId],
+  );
+
+  const handleSelectProject = useCallback(
+    async (projectId: string) => {
+      setSelectedProjectId(projectId);
+      persistSelectedProjectId(projectId);
+      await refreshWorkspace(projectId);
+    },
+    [refreshWorkspace],
+  );
+
+  const handleCreateProject = useCallback(async (input: { title: string; logline: string }) => {
+    const data = await krApiFetch<WorkspaceSnapshot>("/api/kr/workspace", {
+      method: "POST",
+      body: JSON.stringify({
+        action: "create_project",
+        title: input.title || undefined,
+        logline: input.logline || undefined,
+      }),
+    });
+    setWorkspace(data);
+    setSelectedProjectId(data.project.project_id);
+    persistSelectedProjectId(data.project.project_id);
+    setActiveTab("story");
   }, []);
 
   useEffect(() => {
@@ -132,9 +208,19 @@ function StudioShell() {
                   </span>
                 </div>
                 {workspace && (
-                  <p className="truncate text-[11px] text-[var(--kr-muted)]">
-                    Story v{workspace.storyRevision.version} · Timeline v{workspace.timeline.version}
-                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setDrawer("projects")}
+                    className="mt-0.5 inline-flex max-w-full items-center gap-1 rounded-lg bg-white/5 px-2 py-0.5 text-[11px] text-slate-200 hover:bg-white/10"
+                    title="Switch or create project"
+                  >
+                    <FolderKanban className="h-3 w-3 shrink-0 text-violet-300" />
+                    <span className="truncate font-medium">{workspace.project.title}</span>
+                    <span className="shrink-0 text-[var(--kr-muted)]">
+                      · v{workspace.storyRevision.version}/T{workspace.timeline.version}
+                    </span>
+                    <ChevronDown className="h-3 w-3 shrink-0 text-[var(--kr-muted)]" />
+                  </button>
                 )}
               </div>
             </div>
@@ -146,12 +232,13 @@ function StudioShell() {
           </div>
 
           <div className="flex items-center justify-between gap-1 sm:justify-end">
-            <div className="grid w-full grid-cols-5 gap-1 sm:flex sm:w-auto sm:items-center">
+            <div className="grid w-full grid-cols-6 gap-1 sm:flex sm:w-auto sm:items-center">
               {(
                 [
+                  { id: "projects", icon: FolderKanban, label: "Projects" },
                   { id: "canon", icon: BookOpen, label: "Canon" },
                   { id: "assets", icon: FolderOpen, label: "Assets" },
-                  { id: "connections", icon: Link2, label: "Connections" },
+                  { id: "connections", icon: Link2, label: "Connect" },
                   { id: "activity", icon: Activity, label: "Activity" },
                   { id: "settings", icon: Settings, label: "Settings" },
                 ] as const
@@ -240,21 +327,34 @@ function StudioShell() {
           <>
             {activeTab === "story" && (
               <StoryTab
+                key={workspace.project.project_id}
                 workspace={workspace}
                 draftInstruction={draftInstruction}
                 onDraftInstructionChange={setDraftInstruction}
-                onRefresh={refreshWorkspace}
+                onRefresh={() => refreshWorkspace()}
                 onNavigateProduction={() => setActiveTab("production")}
               />
             )}
             {activeTab === "production" && (
-              <ProductionTab workspace={workspace} onRefresh={refreshWorkspace} />
+              <ProductionTab
+                key={workspace.project.project_id}
+                workspace={workspace}
+                onRefresh={() => refreshWorkspace()}
+              />
             )}
             {activeTab === "editor" && (
-              <EditorTab workspace={workspace} onRefresh={refreshWorkspace} />
+              <EditorTab
+                key={workspace.project.project_id}
+                workspace={workspace}
+                onRefresh={() => refreshWorkspace()}
+              />
             )}
             {activeTab === "exports" && (
-              <ExportsTab workspace={workspace} onRefresh={refreshWorkspace} />
+              <ExportsTab
+                key={workspace.project.project_id}
+                workspace={workspace}
+                onRefresh={() => refreshWorkspace()}
+              />
             )}
           </>
         )}
@@ -297,10 +397,13 @@ function StudioShell() {
       {/* Side Drawers */}
       {workspace && (
         <StudioDrawers
+          key={workspace.project.project_id}
           drawer={drawer}
           workspace={workspace}
           onClose={() => setDrawer("none")}
-          onRefresh={refreshWorkspace}
+          onRefresh={() => refreshWorkspace()}
+          onSelectProject={handleSelectProject}
+          onCreateProject={handleCreateProject}
         />
       )}
     </div>

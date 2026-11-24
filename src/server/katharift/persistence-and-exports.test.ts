@@ -4,6 +4,7 @@ import { trimClipOutEdge, updateAudioStem } from "../../packages/editor/engine.t
 import { StoryRevisionConflictError } from "./route-errors.ts";
 import {
   claimJobForWorker,
+  createNewProject,
   createOrRenderExport,
   createStoryPatchProposal,
   createWorkerPairingSession,
@@ -244,6 +245,24 @@ test(
       );
       assert.equal(expiredWs?.lifecycle_state, "expired");
       assert.equal(expiredWs?.is_connected, false);
+
+      // 9. Multi-project creation, project list, and reopening existing project intact
+      const secondProject = await createNewProject(userId, {
+        title: "Monsoon Night Express",
+        logline: "A late-night train carries two archivists through flooded hills.",
+      });
+      assert.notEqual(secondProject.project.project_id, projectId);
+      assert.equal(secondProject.project.title, "Monsoon Night Express");
+      assert.equal(secondProject.storyRevision.version, 1);
+      assert.equal(secondProject.timeline.version, 1);
+      assert.equal(secondProject.projects.length, 2);
+
+      // Reopen Project 1 explicitly -> verifies Story v2 and Timeline v3 remained intact
+      const reopenedFirst = await getOrCreateActiveWorkspace(userId, projectId);
+      assert.equal(reopenedFirst.project.project_id, projectId);
+      assert.equal(reopenedFirst.storyRevision.version, 2);
+      assert.equal(reopenedFirst.timeline.version, 3);
+      assert.equal(reopenedFirst.projects.length, 2);
     } finally {
       for (const [k, v] of Object.entries(prevEnv)) {
         if (v === undefined) delete process.env[k];
